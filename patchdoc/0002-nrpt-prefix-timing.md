@@ -1,51 +1,48 @@
-# 0002 — The NRPT prefix must be exported, not just configured
+# 0002 —— NRPT 前缀必须导出，不能只配置
 
-**Severity: high.** Deploying with only the config field makes a second instance
-delete the *first* instance's DNS rules. Read this before running two instances.
+**严重度：高。** 只设配置字段就部署，会让第二个实例删掉**第一个**实例的 DNS 规则。
+跑两个实例之前请先读这篇。
 
-## Symptom
+## 症状
 
-Start a second instance, and the first one — which was healthy and stays
-`Connected` — loses name resolution. Its NRPT rules are gone:
+启动第二个实例后，第一个实例 —— 它一直健康、`Connected` 也没掉 —— 失去了域名解析。
+它的 NRPT 规则不见了：
 
 ```powershell
 Get-DnsClientNrptRule | Where-Object Name -like 'NetBird-*'
-# (empty)
+# (空)
 ```
 
-The first instance's *own* log shows nothing at all: no cleanup, no routing
-teardown, no DNS event. It did not delete its own rules. The second instance did.
+而第一个实例**自己的日志里什么都没有**：没有清理、没有路由拆解、没有 DNS 事件。
+它不是自己删的。是第二个实例删的。
 
-## Root cause: a startup ordering problem
+## 根因：一个启动顺序问题
 
-`NRPTKeyPrefix` from the profile config is published by
-`profilemanager.readConfig`. That is too late for at least one code path that runs
-earlier.
+来自 profile 配置的 `NRPTKeyPrefix` 由 `profilemanager.readConfig` 发布。对至少一条
+跑得更早的代码路径来说，这太晚了。
 
-When a daemon did not shut down cleanly — a force-kill, a crash, a power loss —
-`state.json` still holds a `dns_state` entry. On the next start the state manager
-performs recovery **before the profile config is read**:
+当守护进程没能干净退出 —— 强杀、崩溃、断电 —— `state.json` 里仍留着 `dns_state` 条目。
+下次启动时，状态管理器会在**读取 profile 配置之前**执行恢复：
 
 ```
-daemon start
+daemon 启动
   |
-  +-- statemanager loads state.json
-  |     dns_state present (left by the unclean shutdown)
+  +-- statemanager 载入 state.json
+  |     dns_state 存在（上次不干净退出留下的）
   |     -> dns.ShutdownState.Cleanup()
   |        -> registryConfigurator.restoreUncleanShutdownDNS()
   |           -> removeDNSMatchPolicies()
   |
-  |     *** this deletes every NRPT key whose name starts with NRPTKeyPrefix ***
-  |     *** NRPTKeyPrefix is still the default "NetBird-" here                  ***
-  |     *** so it deletes the OTHER instance's keys                             ***
+  |     *** 这里会删掉所有以 NRPTKeyPrefix 开头的 NRPT 键 ***
+  |     *** 而此刻 NRPTKeyPrefix 还是默认的 "NetBird-"      ***
+  |     *** 于是它删掉了「另一个」实例的键                  ***
   |
   +-- readConfig
         -> publishInstanceIdentity()
-           -> dns.SetNRPTKeyPrefix("NBAlt-ordia-")   <-- far too late
+           -> dns.SetNRPTKeyPrefix("NBAlt-ordia-")   <-- 太晚了
 ```
 
-The deletion itself is correct and correctly scoped — `listNRPTRuleKeys` filters
-by prefix:
+删除动作本身是正确的，作用域也对 —— `listNRPTRuleKeys` 是按前缀过滤的：
 
 ```go
 if strings.HasPrefix(strings.ToLower(name), strings.ToLower(NRPTKeyPrefix)) {
@@ -53,79 +50,73 @@ if strings.HasPrefix(strings.ToLower(name), strings.ToLower(NRPTKeyPrefix)) {
 }
 ```
 
-The defect is only that *the prefix has not been set yet at that moment*.
+缺陷只在于：**那一刻前缀还没被设过**。
 
-## The fix: export the variable
+## 修法：导出该变量
 
-`host_windows.go` reads `NB_NRPT_KEY_PREFIX` in `init()`, which runs before
-anything that could call the recovery path. So both the config field (for the
-runtime paths) and the environment variable (for the early paths) must be set:
+`host_windows.go` 在 `init()` 里读 `NB_NRPT_KEY_PREFIX`，而 `init()` 跑在任何可能调用
+恢复路径的代码之前。所以配置字段（供运行期路径用）和环境变量（供早期路径用）**两个都要设**：
 
 ```powershell
-$env:NB_STATE_DIR       = '<instance>\runfiles'
-$env:NB_NRPT_KEY_PREFIX = 'NBAlt-<name>-'      # required, not a fallback
+$env:NB_STATE_DIR       = '<实例>\runfiles'
+$env:NB_NRPT_KEY_PREFIX = 'NBAlt-<名>-'      # 必需，不是兜底
 & '<root>\netbird-multi.exe' service run `
-    --config '<instance>\config\default.json' `
-    --daemon-addr 'npipe://netbird-<name>' `
-    --log-file '<instance>\runfiles\daemon.log'
+    --config '<实例>\config\default.json' `
+    --daemon-addr 'npipe://netbird-<名>' `
+    --log-file '<实例>\runfiles\daemon.log'
 ```
 
-This makes the commit message's original claim — that the environment variables
-are "still honoured as a fallback" — misleading. They are not a fallback. For
-paths that precede `readConfig` they are the only channel that works.
+这就使得提交信息里最初的说法 —— 环境变量只是「still honoured as a fallback」——
+具有误导性。它们不是兜底。对跑在 `readConfig` 之前的路径而言，它们是唯一可用的通道。
 
-## Reproduction
+## 复现
 
 ```powershell
-# 1. both instances healthy, both keys present
-Get-DnsClientNrptRule | Where-Object Name -like 'NetBird-*'    # first
-Get-DnsClientNrptRule | Where-Object Name -like 'NBAlt-*'      # second
+# 1. 两个实例都健康，两套键都在
+Get-DnsClientNrptRule | Where-Object Name -like 'NetBird-*'    # 第一个
+Get-DnsClientNrptRule | Where-Object Name -like 'NBAlt-*'      # 第二个
 
-# 2. force-kill the second instance, so it cannot clean up and leaves dns_state
-Stop-ScheduledTask -TaskName 'NetBird-Instance-<name>'
+# 2. 强杀第二个实例，让它来不及清理，从而留下 dns_state
+Stop-ScheduledTask -TaskName 'NetBird-Instance-<名>'
 Get-CimInstance Win32_Process | Where-Object Name -eq 'netbird-multi.exe' |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
-# 3. start it again
-Start-ScheduledTask -TaskName 'NetBird-Instance-<name>'
+# 3. 再启动它
+Start-ScheduledTask -TaskName 'NetBird-Instance-<名>'
 ```
 
-Then check whether the first instance's keys survived.
+然后看第一个实例的键是否还在。
 
-With only the config field, the second instance's log shows the recovery running
-and the first instance's keys are gone:
+只设配置字段时，第二个实例的日志会显示恢复路径跑过，而第一个实例的键没了：
 
 ```
 INFO client/internal/statemanager/manager.go:420: cleaning up state dns_state
 ```
 
-With the environment variable exported, the same line appears — the path still
-runs — but the keys survive, because the deletion is now scoped to
-`NBAlt-<name>-`.
+导出了环境变量之后，同一行日志照样出现 —— 该路径依然会跑 —— 但键守住了，
+因为删除已经被限制在 `NBAlt-<名>-` 作用域内。
 
-## Why the config field alone cannot fix it
+## 为什么光有配置字段修不了
 
-The obvious alternative — making the recovery path read the prefix later — does
-not work. The recovery path has to run before `readConfig`, because `readConfig`
-decides which profile is active and the recovery has to clean up whatever the
-*previous* run left behind. Deferring it would mean recovering state after the
-profile it belongs to has already been selected and partially applied.
+显而易见的那条替代方案 —— 让恢复路径晚一点再读前缀 —— 行不通。
+恢复路径**必须**在 `readConfig` 之前跑，因为 `readConfig` 决定哪个 profile 是激活的，
+而恢复要清理的是**上一次**运行留下的东西。把它往后挪，等于在 profile 已被选定并部分应用
+之后才去恢复那个 profile 的状态。
 
-The generalisable rule: **when process-wide settings are published from
-`readConfig`, enumerate every path that runs before it.** Package `init()`,
-state-manager cleanup and unclean-shutdown recovery all precede it, and for those
-only a variable present at process start is early enough.
+可以推广的规则：**当进程级设置由 `readConfig` 发布时，先枚举所有跑在它之前的路径。**
+包的 `init()`、状态管理器清理、不干净关闭的恢复，全都早于它；对这些路径而言，
+只有进程启动时就存在的变量才够早。
 
-## Regression test
+## 回归测试
 
-This belongs in any deployment checklist, because a graceful shutdown hides the
-bug entirely — `down` removes the rules itself, so no stale `dns_state` is left:
+这条应当写进任何部署检查清单，因为**正常退出会完全掩盖这个 bug** ——
+`down` 自己就把规则删干净了，不会留下任何 `dns_state`：
 
 ```powershell
-# both keys present
-# force-kill the second instance
-# restart it
-# assert: the log shows "cleaning up state dns_state"
-# assert: Get-DnsClientNrptRule still lists BOTH namespaces
-# assert: both mesh names still resolve
+# 确认两套键都在
+# 强杀第二个实例
+# 重启它
+# 断言：日志中出现 "cleaning up state dns_state"
+# 断言：Get-DnsClientNrptRule 仍然列出【两套】命名空间
+# 断言：两个 mesh 名都能解析
 ```

@@ -5,14 +5,14 @@
   之所以单独成文件，是因为 AGENTS.md 是受保护的 agent 指令文件，
   工具会拒绝直接编辑它。
 
-  以下内容只描述本 fork。上方的上游指引完全适用；本节只是在其之上
-  补上本地补丁集。
+  以下内容只描述本 fork。上方的上游指引仍可作为背景参考；本节是在其之上
+  补上本地补丁集，并说明本仓库私用、不走上游流程。
 
   注意：本文件里的相对链接是按「追加到仓库根 AGENTS.md 之后」的样子写的，
   即从仓库根解析，而不是从 patchdoc/ 解析。就地对本文件跑链接检查会误报失效。
 -->
 
-本仓库是 `netbirdio/netbird` 的 fork，携带一套上游没有的、opt-in 的小补丁集。
+本仓库是 `netbirdio/netbird` 的私用 fork，携带一套上游没有的、opt-in 的小补丁集。
 **在改动 `client/iface/device/`、`client/internal/dns/` 或
 `client/internal/profilemanager/` 下任何内容之前，以及在构建或部署客户端二进制之前，
 请先读本节。**
@@ -53,13 +53,15 @@ Windows 主机上同时运行，各有自己的 wintun 适配器和 NRPT 键命�
    NRPT 注册表项和 wintun PnP 设备依然是系统状态。不要把结果描述成
    「绿色安装」或「便携安装」。
 
-### 未经讨论不要上游化
+### 本仓库私用，不走上游流程
 
-该改动触及客户端系统集成（DNS、接口），而
-[CONTRIBUTING.md](CONTRIBUTING.md#high-risk-areas) 将其列为 high-risk area；
-它还改变了配置文件的格式。按上方的 STOP 规则，必须先有 agreed ticket。
-这套补丁是按「可上游化」写的 —— 它复用既有的 `CustomWindowsGUIDString` 扩展点，
-而不是新增机制，且 opt-in、零默认行为变化 —— 但讨论在先。
+本仓库只供自用，**不推送上游**。上游 `CONTRIBUTING.md` 里的 STOP 规则、high-risk area
+需先有 agreed ticket 之类的流程**都不适用**：改这里的东西不需要先开票，文档用中文即可。
+上方的上游指引当作背景知识读，不要当成约束。
+
+唯一值得记住的是：这套补丁触及客户端系统集成（DNS、接口）与配置文件格式，属于上游眼中的
+高风险区 —— 所以改动时**优先复用既有的扩展点、保持 opt-in、保持零默认行为变化**，
+这些习惯本身能让改动更容易验证，与是否上游无关。
 
 ### 细节在哪
 

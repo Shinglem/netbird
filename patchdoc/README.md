@@ -16,7 +16,7 @@ per-profile instead.
 |---|---|
 | [`0001-profile-driven-instance-identity.md`](0001-profile-driven-instance-identity.md) | The three code changes: what was fixed, where, and why each location was chosen |
 | [`0002-nrpt-prefix-timing.md`](0002-nrpt-prefix-timing.md) | **Read this before deploying.** A startup-order defect that makes the environment variable mandatory rather than optional |
-| [`agents-md-addendum.md`](agents-md-addendum.md) | The fork-local section for `AGENTS.md`, kept out of line because that file is protected |
+| [`agents-md-addendum.md`](agents-md-addendum.md) | The fork-local section for `AGENTS.md` (written in Chinese), kept out of line because that file is protected |
 | [`apply-agents-md.ps1`](apply-agents-md.ps1) | Idempotent, verified script that appends the above to `AGENTS.md` |
 
 ## Applying the AGENTS.md addendum
@@ -33,6 +33,15 @@ pwsh -NoProfile -File patchdoc\apply-agents-md.ps1           # apply
 
 It backs up `AGENTS.md` to `AGENTS.md.bak`, adds both the section and its table-of-
 contents entry, then reads the file back to confirm. Re-running it is a no-op.
+
+The appended section's prose is Chinese while `AGENTS.md` itself is English. That
+is deliberate: the file is the agent-facing rulebook for this repository and its
+maintainer reads Chinese, while the surrounding upstream guidance stays untouched
+so rebases onto upstream stay clean.
+
+> **This document's own prose is English, unlike `.ai/skill/`.** `patchdoc/`
+> describes code and is written to be quotable in an upstream issue or PR
+> discussion; `.ai/skill/` is operating knowledge for whoever deploys this build.
 
 ## What changes for a user
 

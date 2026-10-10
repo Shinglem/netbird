@@ -1,101 +1,89 @@
-## Fork-local changes (this repository)
+## 本 fork 的改动
 
 <!--
-  This section is appended to AGENTS.md by patchdoc/apply-agents-md.ps1.
-  It is kept as a separate file because AGENTS.md is a protected
-  agent-instruction file that tooling refuses to edit directly.
+  本节的正文由 patchdoc/apply-agents-md.ps1 追加到 AGENTS.md。
+  之所以单独成文件，是因为 AGENTS.md 是受保护的 agent 指令文件，
+  工具会拒绝直接编辑它。
 
-  Everything below describes THIS FORK only. Upstream guidance above still
-  applies in full; this section adds the local patch set on top of it.
+  以下内容只描述本 fork。上方的上游指引完全适用；本节只是在其之上
+  补上本地补丁集。
 
-  NOTE: relative links in this file are written as they must appear once the
-  section is appended to the repository-root AGENTS.md, i.e. they resolve from
-  the repository root, not from patchdoc/. A link checker run on this file
-  in place will report them as broken.
+  注意：本文件里的相对链接是按「追加到仓库根 AGENTS.md 之后」的样子写的，
+  即从仓库根解析，而不是从 patchdoc/ 解析。就地对本文件跑链接检查会误报失效。
 -->
 
-This repository is a fork of `netbirdio/netbird` carrying one small, opt-in
-patch set that upstream does not have. **Read this before changing anything under
-`client/iface/device/`, `client/internal/dns/`, or
-`client/internal/profilemanager/`, and before building or deploying a client
-binary.**
+本仓库是 `netbirdio/netbird` 的 fork，携带一套上游没有的、opt-in 的小补丁集。
+**在改动 `client/iface/device/`、`client/internal/dns/` 或
+`client/internal/profilemanager/` 下任何内容之前，以及在构建或部署客户端二进制之前，
+请先读本节。**
 
-### What the patch set does
+### 这套补丁做了什么
 
-It makes two Windows settings per-profile instead of process-wide, so that
-several NetBird instances can run on one Windows host at the same time, each with
-its own wintun adapter and its own NRPT key namespace:
+它把两处 Windows 设置从进程级改成 per-profile，从而让多个 NetBird 实例能在同一台
+Windows 主机上同时运行，各有自己的 wintun 适配器和 NRPT 键命名空间：
 
-- `Config.WintunGUID` — the adapter GUID this profile's interface is created with
-- `Config.NRPTKeyPrefix` — the namespace its NRPT rule keys use
+- `Config.WintunGUID` —— 本 profile 的接口创建时使用的适配器 GUID
+- `Config.NRPTKeyPrefix` —— 它的 NRPT 规则键所用的命名空间
 
-Both are `omitempty`, and an empty value reproduces upstream behaviour exactly, so
-an existing config is unaffected and the same binary still works as an ordinary
-client. The commit message for the change says the environment variables are
-"honoured as a fallback"; for the reasons below that wording is wrong.
+两者都是 `omitempty`，空值与上游行为逐字节一致，所以已有配置不受影响，
+同一份二进制仍可作为普通客户端使用。该改动的提交信息说环境变量是
+「honoured as a fallback」；基于下面的原因，这个说法是错的。
 
-### Rules that follow from it
+### 由此产生的规则
 
-1. **`NB_NRPT_KEY_PREFIX` must be exported, not only configured.** The config
-   value is published by `readConfig`, which runs *after* the unclean-shutdown
-   recovery path — and that path deletes NRPT rules filtered by the prefix. With
-   only the config field set, it sees the built-in `NetBird-` and deletes the
-   *other* instance's rules. Any launcher that sets `NB_STATE_DIR` must set this
-   too.
+1. **`NB_NRPT_KEY_PREFIX` 必须导出，不能只配置。** 配置值由 `readConfig` 发布，
+   而它跑在不干净关闭的恢复路径**之后** —— 那条路径按前缀过滤并删除 NRPT 规则。
+   只设配置字段时，它看到的是内置的 `NetBird-`，于是删掉**另一个**实例的规则。
+   凡是设置了 `NB_STATE_DIR` 的启动脚本，都必须同时设置它。
 
-2. **Publish process-wide settings from `readConfig`, never from `apply()`.**
-   `apply()` also runs against throwaway probe and baseline configs; writing
-   process-wide state from a config that is only being inspected leaks one
-   profile's identity into the running one. When adding another such setting,
-   check what runs *before* `readConfig` and decide what channel reaches it.
+2. **进程级设置一律从 `readConfig` 发布，绝不要从 `apply()`。** `apply()` 也会对
+   一次性的探针配置和基线配置执行；从一份只被检查的配置里写进程级状态，
+   会把某个 profile 的身份泄漏进正在运行的那个。新增此类设置时，先查清有哪些路径
+   跑在 `readConfig` **之前**，再决定用哪个通道触达它们。
 
-3. **Keep the non-Windows side building.** `SetWintunGUID` and
-   `SetNRPTKeyPrefix` are defined on every platform (the latter as a `//go:build
-   !windows` no-op) so callers need no build tags. Verify with
-   `GOOS=linux` and `GOOS=darwin` builds, not just a Windows one.
+3. **保持非 Windows 平台可构建。** `SetWintunGUID` 和 `SetNRPTKeyPrefix` 在所有平台
+   都有定义（后者是 `//go:build !windows` 的空实现），这样调用方不需要 build tag。
+   验证时要用 `GOOS=linux` 和 `GOOS=darwin` 构建，不能只验 Windows。
 
-4. **Do not convert the NRPT prefix back to a `const`.** `NRPTKeyPrefix` and the
-   four paths derived from it have to be recomputed together whenever the prefix
-   changes; splitting them across a const and a var is how they drift apart.
+4. **不要把 NRPT 前缀改回 `const`。** `NRPTKeyPrefix` 和由它派生的四条路径，
+   必须在每次前缀变化时一起重算；把它们拆到一个 const 和一个 var 里，
+   正是它们彼此漂移的原因。
 
-5. **Nothing here makes the client portable.** The service registration, the
-   scheduled task, the wintun kernel driver, the NRPT registry entries and the
-   wintun PnP device remain system state. Do not describe the result as a
-   green or portable install.
+5. **这些改动不会让客户端变得便携。** 服务注册、计划任务、wintun 内核驱动、
+   NRPT 注册表项和 wintun PnP 设备依然是系统状态。不要把结果描述成
+   「绿色安装」或「便携安装」。
 
-### Do not upstream this without a discussion
+### 未经讨论不要上游化
 
-The change touches client system integration (DNS, interface), which
-[CONTRIBUTING.md](CONTRIBUTING.md#high-risk-areas) lists as a high-risk area, and
-it changes a config file format. Per the STOP rules above, that needs an agreed
-ticket first. The patch was written to be upstreamable — it reuses the existing
-`CustomWindowsGUIDString` extension point rather than adding a new mechanism, and
-is opt-in with zero default-behaviour change — but the discussion comes first.
+该改动触及客户端系统集成（DNS、接口），而
+[CONTRIBUTING.md](CONTRIBUTING.md#high-risk-areas) 将其列为 high-risk area；
+它还改变了配置文件的格式。按上方的 STOP 规则，必须先有 agreed ticket。
+这套补丁是按「可上游化」写的 —— 它复用既有的 `CustomWindowsGUIDString` 扩展点，
+而不是新增机制，且 opt-in、零默认行为变化 —— 但讨论在先。
 
-### Where the detail lives
+### 细节在哪
 
-| Path | Content |
+| 路径 | 内容 |
 |---|---|
-| [`patchdoc/`](patchdoc/README.md) | What the patch changes, file by file, and how to verify it |
-| [`patchdoc/0002-nrpt-prefix-timing.md`](patchdoc/0002-nrpt-prefix-timing.md) | The startup-order defect and why the environment variable is mandatory |
-| [`.ai/skill/`](.ai/skill/README.md) | Task-scoped skills — start with `netbird-multi-instance` |
+| [`patchdoc/`](patchdoc/README.md) | 补丁改了哪些文件、怎么验收 |
+| [`patchdoc/0002-nrpt-prefix-timing.md`](patchdoc/0002-nrpt-prefix-timing.md) | 启动时序缺陷，以及为何环境变量是必需的 |
+| [`.ai/skill/`](.ai/skill/README.md) | 按任务加载的技能 —— 从 `netbird-multi-instance` 开始 |
 
-### Building and verifying a client binary
+### 构建与验收客户端二进制
 
 ```bash
-cd client && CGO_ENABLED=0 go build .        # matches upstream's goreleaser config
+cd client && CGO_ENABLED=0 go build .        # 与上游 goreleaser 配置一致
 
 go fmt ./...
 go vet ./client/iface/device/... ./client/internal/dns/... ./client/internal/profilemanager/...
 
-# the stubs must keep every platform building
+# 空实现必须保证各平台都能构建
 GOOS=linux  GOARCH=amd64 CGO_ENABLED=0 go build ./client/...
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./client/...
 ```
 
-Before deploying a rebuilt binary, confirm the instance-identity symbols are
-actually in it — a build that silently lost them still runs, and still claims the
-default GUID and prefix:
+部署重新构建的二进制之前，先确认实例身份相关的符号确实在产物里 ——
+一个悄悄丢了它们的构建照样能跑，照样会用默认 GUID 和默认前缀：
 
 ```bash
 grep -c WintunGUID <binary> && grep -c NRPTKeyPrefix <binary> && grep -c SetNRPTPrefix <binary>

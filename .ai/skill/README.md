@@ -1,26 +1,22 @@
-# Agent skills
+# AI 技能
 
-Reusable, task-scoped knowledge for AI agents working in this repository or
-deploying what it builds.
+给在本仓库工作、或部署本仓库构建产物的 AI agent 用的、可按需加载的复用知识。
 
-These are **skills in the `SKILL.md` sense**: a trigger, the workflow, and the
-pitfalls that cost real debugging time — not reference documentation. They are
-written to be loaded when the task matches, and skipped otherwise.
+这些是 **`SKILL.md` 意义上的技能**：触发条件、工作流，以及那些真正花掉调试时间的坑 ——
+不是参考资料。设计成任务匹配时加载、不匹配时跳过。
 
-| Skill | Load when |
+| 技能 | 何时加载 |
 |---|---|
-| [`netbird-multi-instance/`](netbird-multi-instance/SKILL.md) | Running, or debugging, more than one NetBird instance on a single host |
+| [`netbird-multi-instance/`](netbird-multi-instance/SKILL.md) | 在同一台主机上运行或排查多个 NetBird 实例 |
 
-Two conventions these skills follow, both deliberate:
+这些技能遵循两条约定，都是刻意为之：
 
-- **`SKILL.md` carries the workflow and the traps.** Anything long, narrow or
-  only occasionally relevant lives in `references/` and is loaded on demand, so
-  the common path stays short.
-- **Every non-obvious claim names its evidence** — a source file, a log line, a
-  measured number. A skill that just asserts "do X" cannot be checked when the
-  code moves out from under it.
+- **`SKILL.md` 只装工作流与坑。** 篇幅长、面窄、或只是偶尔相关的内容放进 `references/`
+  按需加载，让常见路径保持简短。
+- **每个非显然的结论都要点名证据** —— 一个源文件、一行日志、一个实测数字。只断言
+  「这样做」的技能，在代码变动之后无从校验。
 
-Related material elsewhere in this repository:
+本仓库其他相关材料：
 
-- [`../../patchdoc/`](../../patchdoc/README.md) — what this fork changes and why
-- [`../../AGENTS.md`](../../AGENTS.md) — repository-wide agent guidance
+- [`../../patchdoc/`](../../patchdoc/README.md) —— 本 fork 改了什么、为什么
+- [`../../AGENTS.md`](../../AGENTS.md) —— 仓库级 agent 指引

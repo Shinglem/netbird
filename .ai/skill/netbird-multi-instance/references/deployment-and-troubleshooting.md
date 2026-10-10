@@ -1,116 +1,112 @@
-# Deployment and troubleshooting
+# 部署与排障
 
-## Deploying a second instance
+## 部署第二个实例
 
 ```powershell
 $root = 'C:\app\multinetbird'
 $name = 'ordia'
 
-# 1. layout
+# 1. 目录布局
 New-Item -ItemType Directory -Force -Path `
     "$root\profiles\$name\config", "$root\profiles\$name\runfiles" | Out-Null
 
-# 2. binary + wintun.dll together (the dll must be next to the exe)
+# 2. 二进制与 wintun.dll 放一起（dll 必须与 exe 同目录）
 Copy-Item <built>\netbird.exe "$root\netbird-multi.exe"
 Copy-Item <official-install>\wintun.dll "$root\wintun.dll"
 
-# 3. config: clone an existing profile, then change identity fields.
-#    Edit text, never round-trip through ConvertFrom-Json -- ManagementURL is a
-#    url.URL whose structured form does not survive, and PrivateKey must stay
-#    byte-identical.
+# 3. 配置：克隆一个已有 profile，再改身份字段。
+#    改文本，绝不要经 ConvertFrom-Json 往返 —— ManagementURL 是 url.URL，
+#    其结构形式无法往返，且 PrivateKey 必须保持逐字节一致。
 #      WgIface        -> wt-<name>
-#      WgPort         -> a port unused by the other instances
-#      WintunGUID     -> a fresh GUID, unique on this machine
+#      WgPort         -> 其他实例未占用的端口
+#      WintunGUID     -> 一个新的 GUID，本机唯一
 #      NRPTKeyPrefix  -> NBAlt-<name>-
-#      DisableDNS     -> false      (the instance programs its own DNS)
-#    Write with UTF8Encoding($false): no BOM.
+#      DisableDNS     -> false      （让该实例自己配 DNS）
+#    用 UTF8Encoding($false) 写：无 BOM。
 ```
 
-Then create the launcher and a scheduled task (SYSTEM, `RunLevel Highest`, no
-trigger, so it starts on demand only — a laptop does not want a tunnel it is not
-using). The launcher sets the two environment variables from the skill body.
+然后创建启动脚本和计划任务（SYSTEM、`RunLevel Highest`、无触发器，即只按需启动 ——
+笔记本不需要一条自己不在用的隧道）。启动脚本设置技能正文里那两个环境变量。
 
-## Symptom to cause
+## 症状 → 病因
 
-| Symptom | Most likely cause |
+| 症状 | 最可能的原因 |
 |---|---|
-| `Error loading wintun.dll` | The dll is not in the same directory as the exe |
-| `create wintun interface: GUID already exists` / second adapter never appears | Two instances have the same `WintunGUID` |
-| Second instance connects, first instance stops resolving names | `NB_NRPT_KEY_PREFIX` not exported — see `../../patchdoc/0002-nrpt-prefix-timing.md` |
-| `create tun device: ... cannot find the file specified` | Wintun PnP device left bad by a force-kill; remove that instance's device and restart |
-| `invalid character '\ufeff' looking for beginning of value` | The config JSON was written with a BOM |
-| Primary's DNS drops for ~15 s whenever an instance starts/stops | Expected upstream rebuild on interface churn; poll before concluding it is broken |
-| Primary rebuilds every 1–2 minutes while an instance runs | The instance tree is under `%PROGRAMDATA%\Netbird`; move it out |
-| Instance connects but the OS cannot resolve mesh names | NRPT prefix mismatch, or `DisableDNS: true` left over from a different mode |
-| `Interface type: Userspace` but the adapter exists and routes work | Cosmetic: a management-reported flag, not a local capability |
+| `Error loading wintun.dll` | dll 与 exe 不在同一目录 |
+| `create wintun interface: GUID already exists` / 第二个适配器始终不出现 | 两个实例的 `WintunGUID` 相同 |
+| 第二个实例连上后，第一个实例不再解析域名 | 没导出 `NB_NRPT_KEY_PREFIX` —— 见 `../../patchdoc/0002-nrpt-prefix-timing.md` |
+| `create tun device: ... cannot find the file specified` | 强杀把 wintun PnP 设备留在了坏状态；删掉该实例的设备后重启 |
+| `invalid character '\ufeff' looking for beginning of value` | 配置 JSON 被写成了带 BOM |
+| 实例每次启停，主实例 DNS 掉约 15 秒 | 接口变动引发的上游重建，属预期；先轮询再下结论 |
+| 实例运行期间主实例每一两分钟重建一次 | 实例目录树在 `%PROGRAMDATA%\Netbird` 下；挪出去 |
+| 实例连上了，但系统解析不了 mesh 名 | NRPT 前缀不匹配，或从别的模式残留的 `DisableDNS: true` |
+| `Interface type: Userspace`，但适配器在、路由也通 | 仅显示层面：管理服务器下发的标志，不代表本机能力 |
 
-## Log forensics
+## 日志取证
 
-Two logs matter, and they answer different questions.
+有两份日志值得看，它们回答不同的问题。
 
-**The instance's own log** (`runfiles\daemon.log`) says what the instance did:
+**实例自己的日志**（`runfiles\daemon.log`）说明该实例做了什么：
 
 ```bash
 grep -E "cleaning up state dns_state|added [0-9]+ NRPT|Routing (cleanup|setup) complete" daemon.log
 ```
 
-`cleaning up state dns_state` means the unclean-shutdown recovery ran — which is
-the path that deletes by prefix. If another instance lost its rules at the same
-timestamp, this is the culprit.
+`cleaning up state dns_state` 意味着不干净关闭的恢复路径跑了 —— 那正是按前缀删除的路径。
+如果另一个实例在同一时刻丢了规则，它就是元凶。
 
-**The primary's log** (`%PROGRAMDATA%\Netbird\client.log`) says whether the
-primary was disturbed. Baseline the line count, act, then diff:
+**主实例的日志**（`%PROGRAMDATA%\Netbird\client.log`）说明主实例有没有被打扰。
+先记录行数基线，操作，再比对：
 
 ```bash
 BEFORE=$(wc -l < /c/ProgramData/Netbird/client.log)
-# ... start or stop an instance ...
+# ... 启停一个实例 ...
 sed -n "$((BEFORE+1)),\$p" /c/ProgramData/Netbird/client.log |
     grep -E "cleanupConnection|service is down|Routing (cleanup|setup) complete|active profile config existed"
 ```
 
-Anything there means the primary rebuilt. The marker line is
-`client/server/server.go: active profile config existed: true`, which sits inside
-`cleanupConnection()` — reachable only from `Server.Down()` or a profile logout.
-If you did not issue either, look for what made the daemon take that path.
+出现任何一条就说明主实例重建了。标志行是
+`client/server/server.go: active profile config existed: true`，位于
+`cleanupConnection()` 内 —— 只有 `Server.Down()` 或 profile 登出能到达这里。
+如果你没发起过这两者，就去查是什么让守护进程走上了那条路径。
 
-**Timestamps are the whole argument.** A conclusion of the form "the primary
-broke the DNS" is only valid if the primary's log has an event at that moment;
-"the second instance broke the DNS" is only valid if the second instance's log
-does. Compare the two before acting.
+**时间戳就是全部论据。** 结论若形如「主实例把 DNS 弄坏了」，只有在主实例日志于那一刻
+有事件时才成立；「第二个实例把 DNS 弄坏了」同理，只有第二个实例的日志有事件时才成立。
+动手前先比对两份日志。
 
-## Distinguishing the two failure modes
+## 区分两种失效模式
 
-Both look identical from outside — names stop resolving, `netbird status` still
-says `Connected` — but they need different responses:
+从外面看两者一模一样 —— 名字不解析了，`netbird status` 仍显示 `Connected` ——
+但应对方式不同：
 
-| | Rebuild in progress | Prefix deleted the rules |
+| | 重建进行中 | 前缀删掉了规则 |
 |---|---|---|
-| Duration | Recovers in 13–60 s | Permanent until restarted |
-| Primary's log | Has cleanup/setup events | Silent |
-| Second instance's log | Nothing relevant | `cleaning up state dns_state` |
-| Fix | Wait | Export `NB_NRPT_KEY_PREFIX`, then restart the instance |
+| 持续时间 | 13~60 秒内自愈 | 永久，直到重启 |
+| 主实例日志 | 有清理/重建事件 | 静默 |
+| 第二个实例日志 | 无相关内容 | `cleaning up state dns_state` |
+| 修法 | 等 | 导出 `NB_NRPT_KEY_PREFIX`，然后重启该实例 |
 
-Poll for up to a minute before treating a missing key as a fault. A single check
-immediately after an instance starts will report a healthy setup as broken.
+把一次缺失的键当作故障之前，先轮询满一分钟。实例刚启动就查一次，
+会把健康的部署报成坏的。
 
-## Removing an instance
+## 移除一个实例
 
 ```powershell
-# stop it (kills the daemon the task spawned, not just the task's pwsh)
+# 停掉它（要杀掉计划任务拉起的守护进程，而不只是任务自己的 pwsh）
 Stop-ScheduledTask -TaskName 'NetBird-Instance-<name>'
 Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'netbird*' -and $_.CommandLine -like '*npipe://netbird-<name>*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
-# its own DNS rules go with it; if it was force-killed, remove them by prefix
+# 它自己的 DNS 规则随之而去；若曾被强杀，按前缀删掉
 Get-DnsClientNrptRule | Where-Object Name -like 'NBAlt-<name>-*' |
     ForEach-Object { Remove-DnsClientNrptRule -Name $_.Name -Force }
 
-# then the task, and optionally the instance directory
+# 然后是任务；实例目录可选保留
 Unregister-ScheduledTask -TaskName 'NetBird-Instance-<name>' -Confirm:$false
 ```
 
-Match the process on **both** `Name` and `CommandLine`. Filtering on the command
-line alone also matches the shell running the cleanup, which then kills itself.
+匹配进程要**同时**看 `Name` 和 `CommandLine`。只按命令行过滤，会连正在执行清理的那个
+shell 一起匹配到，于是它把自己也杀掉。
 
-Leave the wintun PnP device alone unless the next start fails. It is reusable, and
-the device class is shared with unrelated software (see the SKILL's pitfalls).
+除非下次启动失败，否则别动 wintun PnP 设备。它可以复用，而且这个设备类是与无关软件共享的
+（见 SKILL 的坑一节）。

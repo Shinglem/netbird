@@ -36,16 +36,15 @@ var (
 // Registry locations of the host DNS configuration this package programs,
 // exported so a diagnostic reader reports the same locations that are written.
 const (
-	// NRPTKeyPrefix starts the name of every NRPT rule key this client creates:
-	// the match rules, the catch-all, and the .local exemption. Cleanup
-	// enumerates by this prefix, so a new kind of rule is removed by existing
-	// code as long as its key starts here.
-	NRPTKeyPrefix = "NetBird-"
+	// defaultNRPTKeyPrefix is the prefix upstream has always used, and the one an
+	// unconfigured client keeps. Cleanup enumerates by prefix, so the name is
+	// part of the contract with rules written by earlier runs.
+	defaultNRPTKeyPrefix = "NetBird-"
 
-	// nrptMatchKeyName names the match-domain rules. Older versions used
-	// different layouts under the same name: a single unsuffixed key, then one
-	// key per domain, now one key per batch of domains.
-	nrptMatchKeyName = NRPTKeyPrefix + "Match"
+	// envNRPTKeyPrefix lets the prefix be overridden from the environment. It is
+	// read at package initialisation, before any profile config is loaded, so a
+	// value from the config (see SetNRPTKeyPrefix) takes precedence over it.
+	envNRPTKeyPrefix = "NB_NRPT_KEY_PREFIX"
 
 	// DNSPolicyConfigRoot holds the NRPT rules of the local policy store.
 	DNSPolicyConfigRoot = `SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig`
@@ -60,13 +59,63 @@ const (
 	InterfaceConfigPathV6 = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces`
 )
 
-const (
+// The NRPT key name, and the registry paths derived from it, are variables
+// rather than constants so a profile can claim its own namespace within the
+// machine-wide policy store. See SetNRPTKeyPrefix.
+var (
+	// NRPTKeyPrefix starts the name of every NRPT rule key this client creates:
+	// the match rules, the catch-all, and the .local exemption. Cleanup
+	// enumerates by this prefix, so a new kind of rule is removed by existing
+	// code as long as its key starts here.
+	NRPTKeyPrefix = defaultNRPTKeyPrefix
+
+	// nrptMatchKeyName names the match-domain rules. Older versions used
+	// different layouts under the same name: a single unsuffixed key, then one
+	// key per domain, now one key per batch of domains.
+	nrptMatchKeyName = NRPTKeyPrefix + "Match"
+
 	dnsPolicyConfigMatchPath    = DNSPolicyConfigRoot + `\` + nrptMatchKeyName
 	gpoDnsPolicyConfigMatchPath = GPODNSPolicyConfigRoot + `\` + nrptMatchKeyName
 
 	dnsPolicyConfigExemptLocalPath    = DNSPolicyConfigRoot + `\` + NRPTKeyPrefix + `ExemptLocal`
 	gpoDnsPolicyConfigExemptLocalPath = GPODNSPolicyConfigRoot + `\` + NRPTKeyPrefix + `ExemptLocal`
+)
 
+// SetNRPTKeyPrefix gives this process its own NRPT key namespace, so that
+// several instances can program DNS rules on one Windows host without
+// clobbering each other. Cleanup enumerates keys by prefix, so two instances
+// sharing the default prefix would have the second one's shutdown remove the
+// first one's rules.
+//
+// An empty prefix is ignored, which keeps the zero value of the profile config
+// field equivalent to upstream behaviour. One process runs one profile, so the
+// package-level state this writes is unambiguous.
+func SetNRPTKeyPrefix(prefix string) {
+	if prefix == "" {
+		return
+	}
+	setNRPTKeyPrefix(prefix)
+}
+
+// setNRPTKeyPrefix applies the prefix and recomputes every derived path.
+func setNRPTKeyPrefix(prefix string) {
+	NRPTKeyPrefix = prefix
+	nrptMatchKeyName = prefix + "Match"
+
+	dnsPolicyConfigMatchPath = DNSPolicyConfigRoot + `\` + nrptMatchKeyName
+	gpoDnsPolicyConfigMatchPath = GPODNSPolicyConfigRoot + `\` + nrptMatchKeyName
+
+	dnsPolicyConfigExemptLocalPath = DNSPolicyConfigRoot + `\` + prefix + `ExemptLocal`
+	gpoDnsPolicyConfigExemptLocalPath = GPODNSPolicyConfigRoot + `\` + prefix + `ExemptLocal`
+}
+
+func init() {
+	if v := os.Getenv(envNRPTKeyPrefix); v != "" {
+		setNRPTKeyPrefix(v)
+	}
+}
+
+const (
 	nrptCatchAllNamespace = "."
 	// nrptLocalNamespace is reserved for multicast DNS by RFC 6762: a unicast
 	// resolver must not answer for it. The catch-all rule would hand it to us

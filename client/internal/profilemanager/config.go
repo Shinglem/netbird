@@ -20,6 +20,8 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/netbirdio/netbird/client/iface"
+	"github.com/netbirdio/netbird/client/iface/device"
+	"github.com/netbirdio/netbird/client/internal/dns"
 	"github.com/netbirdio/netbird/client/internal/routemanager/dynamic"
 	"github.com/netbirdio/netbird/client/mdm"
 	"github.com/netbirdio/netbird/client/ssh"
@@ -111,12 +113,25 @@ type Config struct {
 	Name string
 
 	// Wireguard private key of local peer
-	PrivateKey                    string
-	PreSharedKey                  string
-	ManagementURL                 *url.URL
-	AdminURL                      *url.URL
-	WgIface                       string
-	WgPort                        int
+	PrivateKey    string
+	PreSharedKey  string
+	ManagementURL *url.URL
+	AdminURL      *url.URL
+	WgIface       string
+	WgPort        int
+
+	// WintunGUID pins the GUID of the wintun adapter this profile's interface is
+	// created with, so that several profiles can run side by side on one Windows
+	// host instead of contending for the same adapter. Windows only, ignored
+	// elsewhere. Empty keeps the built-in default, or the NB_WINDOWS_GUID
+	// environment override.
+	WintunGUID string `json:",omitempty"`
+
+	// NRPTKeyPrefix gives this profile its own NRPT registry key namespace, so
+	// that one instance disconnecting does not remove another instance's DNS
+	// rules. Windows only, ignored elsewhere. Empty keeps the upstream
+	// "NetBird-" default, or the NB_NRPT_KEY_PREFIX environment override.
+	NRPTKeyPrefix                 string `json:",omitempty"`
 	NetworkMonitor                *bool
 	IFaceBlackList                []string
 	DisableIPv6Discovery          bool
@@ -1354,6 +1369,17 @@ func ReadConfigOrDefault(configPath string) (*Config, error) {
 	return readConfig(configPath, true)
 }
 
+// publishInstanceIdentity pushes the platform-specific parts of this profile
+// into the process-wide state the lower layers consult. One process serves one
+// profile, so there is no ambiguity about which instance owns that state.
+//
+// Both knobs are Windows-only concerns, and their setters are no-ops on other
+// platforms, so this needs no build tag of its own.
+func (config *Config) publishInstanceIdentity() {
+	device.SetWintunGUID(config.WintunGUID)
+	dns.SetNRPTKeyPrefix(config.NRPTKeyPrefix)
+}
+
 // readConfig reads the profile config at configPath. createIfMissing resolves a
 // default config in memory when the file is absent, rather than erroring.
 //
@@ -1381,6 +1407,12 @@ func readConfig(configPath string, createIfMissing bool) (*Config, error) {
 		if _, err := config.apply(ConfigInput{}); err != nil {
 			return nil, err
 		}
+
+		// This config defines the running instance, so its platform-specific
+		// identity becomes this process's identity. Deliberately not in apply():
+		// apply() also runs on throwaway probe/baseline configs, which must not
+		// change process-wide state.
+		config.publishInstanceIdentity()
 
 		return config, nil
 	} else if !createIfMissing {

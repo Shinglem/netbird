@@ -1,252 +1,254 @@
-# NetBird Agent Guidelines
+# NetBird agent 指引
 
-**NetBird** is an open source connectivity platform: a WireGuard®-based overlay
-network with a control plane. The **agent** (`client/`) runs on user machines as
-a privileged daemon and manages the WireGuard interface, routing, firewall, and
-DNS. **Management** (`management/`) is the control plane and REST/gRPC API,
-**Signal** (`signal/`) brokers peer handshakes, **Relay** (`relay/`) carries
-traffic when a direct tunnel is impossible, and **Proxy** (`proxy/`) is the
-identity-aware proxy behind Agent Network.
+> **语言约定（强制，优先于本文件其余一切表述）**
+>
+> - **思考过程与回复一律使用中文。** 包括分析、计划、总结、"下一步"之类的旁白。
+> - 代码标识符、命令、路径、配置键名、日志与报错原文、上游 URL 保持英文原样，不要翻译。
+> - 注释与提交信息沿用所在文件的既有语言：上游 Go 代码里的注释保持英文；
+>   本 fork 自己的文档（本文件、`patchdoc/`、`.ai/skill/`、`desktop-ui/`）一律中文。
 
-This file applies to the whole repository, and is the single source of truth for
-agent guidance here. `CLAUDE.md` is a one-line pointer to it — keep the guidance
-in this file, not duplicated there.
+**NetBird** 是开源的连接平台：一张带控制平面的、基于 WireGuard® 的覆盖网络。
+**agent**（`client/`）以特权守护进程的形式跑在用户机器上，管理 WireGuard 接口、路由、
+防火墙与 DNS。**Management**（`management/`）是控制平面兼 REST/gRPC API，**Signal**
+（`signal/`）撮合 peer 握手，**Relay**（`relay/`）在无法直连时承载流量，**Proxy**
+（`proxy/`）是 Agent Network 背后的身份感知代理。
 
-## Contents
+本文件适用于整个仓库，是此处 agent 指引的唯一事实源。`CLAUDE.md` 只是指向它的一行指针 ——
+指引写在本文件里，不要在两处重复。
 
-- [STOP and ask the user before](#stop-and-ask-the-user-before)
-- [Quick reference](#quick-reference)
-- [Structure](#structure)
-- [Where to look](#where-to-look)
-- [Security](#security)
-- [Agent conventions](#agent-conventions)
-- [Repo-wide principles](#repo-wide-principles)
-- [Type safety](#type-safety)
-- [Concurrency and lifecycle](#concurrency-and-lifecycle)
-- [Error handling](#error-handling)
-- [Comments](#comments)
-- [Testing](#testing)
-- [Pitfalls](#pitfalls)
-- [Commits, PRs, releases](#commits-prs-releases)
-- [After you push: CI and review bots](#after-you-push-ci-and-review-bots)
-- [Discussion and support](#discussion-and-support)
+## 目录
 
-## STOP and ask the user before
+- [停止并先问用户](#停止并先问用户)
+- [快速参考](#快速参考)
+- [仓库结构](#仓库结构)
+- [去哪里找](#去哪里找)
+- [安全](#安全)
+- [agent 约定](#agent-约定)
+- [全仓原则](#全仓原则)
+- [类型安全](#类型安全)
+- [并发与生命周期](#并发与生命周期)
+- [错误处理](#错误处理)
+- [注释](#注释)
+- [测试](#测试)
+- [坑](#坑)
+- [提交与发布](#提交与发布)
+- [推送之后](#推送之后)
+- [讨论与支持](#讨论与支持)
+- [本 fork 的改动](#本-fork-的改动)
+- [桌面 UI](#桌面-ui)
 
-- **Opening a pull request for anything beyond a trivial fix, without an agreed
-  ticket.** Ask the user directly: *"Is there a discussion or issue for this
-  change?"* NetBird is discussion-first — community reports start in
-  [Discussions](https://github.com/netbirdio/netbird/discussions), DevRel
-  validates them, and only validated discussions become issues. A PR that
-  changes behavior with no linked issue may be closed on arrival. If there is no
-  ticket, offer to draft the discussion post **instead of** the PR, and wait for
-  the user's call. Only typos, broken links, documentation corrections, and
-  one-line fixes that already have an issue can skip this.
-- **Designing in any high-risk area** (see
-  [CONTRIBUTING.md](CONTRIBUTING.md#high-risk-areas)): public API and OpenAPI
-  schema, gRPC protos, behavior existing deployments would notice after an
-  upgrade, peer connectivity (ICE, NAT traversal, relay selection, WireGuard® or
-  Rosenpass key handling), client system integration (routing, firewall, DNS,
-  interface), authentication and authorization, CLI or service flags, config
-  file format, daemon IPC, store schema and migrations, or a new feature. The
-  design gets agreed in the ticket before code is written.
-- **Writing a store migration or changing a persisted model.** Migrations are
-  one-way in the field and both the GORM and pgx paths may need the change.
-- **Hand-editing generated code.** `*.pb.go`, `*.gen.go`, and mocks are outputs.
-  Edit the source (`.proto`, `openapi.yml`) and rerun the matching
-  `generate.sh`.
-- **Adding, removing, or bumping a dependency**, and never vendor a fork.
-- **Weakening a security control** — authentication, authorization, certificate
-  verification, privilege dropping, or peer identity checks — even when it is
-  the fastest way to make a test pass.
-- **Force-pushing to `main`**, force-pushing any branch that is already under
-  review, amending pushed commits, or bypassing hooks with `--no-verify`.
+## 停止并先问用户
 
-## Quick reference
+- **除了一行式的小修，开 PR 之前先确认有没有 ticket。** 直接问用户：*「这个改动有对应的
+  讨论或 issue 吗？」* NetBird 是 discussion 优先的项目 —— 社区报告先发到
+  [Discussions](https://github.com/netbirdio/netbird/discussions)，DevRel 验证后才转成 issue。
+  没有关联 issue 的行为变更 PR 可能一落地就被关。没有 ticket 时，**改为起草讨论帖**而不是 PR，
+  等用户拍板。只有错别字、失效链接、文档订正，以及「已经有 issue 的一行式修改」可以跳过这一步。
+  *（本 fork 是公开仓库、不向上游提 PR，这条对本地改动不适用；保留它是为了让上游规则保持完整，
+  见 [本 fork 的改动](#本-fork-的改动)。）*
+- **在下列高风险区做设计**（见
+  [CONTRIBUTING.md](CONTRIBUTING.md#high-risk-areas)）：公共 API 与 OpenAPI schema、gRPC proto、
+  升级后现有部署能感知到的行为变更、peer 连通性（ICE、NAT 穿透、relay 选择、WireGuard® 或
+  Rosenpass 密钥处理）、客户端系统集成（路由、防火墙、DNS、接口）、认证与授权、CLI 或服务参数、
+  配置文件格式、daemon IPC、store schema 与迁移、新增功能。设计要先在 ticket 里谈定。
+- **写 store 迁移或改持久化模型。** 迁移在线上是单向的，而且 GORM 与 pgx 两条路径可能都要改。
+- **手改生成代码。** `*.pb.go`、`*.gen.go` 和 mock 都是产物。改源头（`.proto`、`openapi.yml`）
+  并重跑对应的 `generate.sh`。
+- **新增、删除或升级依赖**，以及绝不要 vendor 一个 fork。
+- **削弱安全控制** —— 认证、授权、证书校验、降权、peer 身份校验 —— 哪怕那是让测试变绿最快的路。
+- **向 `main` 强推**、对已在 review 的分支强推、amend 已推送的提交，或用 `--no-verify` 绕过钩子。
+  *（本 fork 的 `main` 只有你在用，本条按 [本 fork 的改动](#本-fork-的改动) 里写的本地纪律执行。）*
+
+## 快速参考
 
 ```bash
-# Build
+# 构建
 go build ./...
 cd client && CGO_ENABLED=0 go build .        # agent
-cd management && go build .                  # management service
-cd signal && go build .                      # signal service
+cd management && go build .                  # management 服务
+cd signal && go build .                      # signal 服务
 
-# Verify (run before every push)
+# 推送前必做
 go fmt ./...
-make lint            # golangci-lint on files changed vs origin/main (also the pre-push hook)
-make lint-all        # full-repository lint, matches CI
-make test-unit       # host-safe unit tests, -tags devcert, no sudo
-make test-privileged # privileged-tagged suite in a Docker container with NET_ADMIN
-make setup-hooks     # wire .githooks: pre-push runs make lint, commit-msg refuses attribution trailers
+make lint            # golangci-lint，只查相对 origin/main 的改动（也是 pre-push 钩子）
+make lint-all        # 全仓 lint，与 CI 一致
+make test-unit       # 宿主安全的单测集，-tags devcert，不需要 sudo
+make test-privileged # privileged 测试集，在带 NET_ADMIN 的 Docker 容器里跑
+make setup-hooks     # 装上 .githooks：pre-push 跑 make lint，commit-msg 拒绝工具署名 trailer
 
-# Narrow runs
+# 窄范围运行
 go test ./client/internal/dns/...
 go test -race -run TestPeerConn ./client/internal/peer/...
 PRIV_RUN=TestNftablesManager PRIV_PKGS=./client/firewall/nftables/... make test-privileged
 
-# Code generation (never hand-edit the output)
-./shared/management/http/api/generate.sh   # REST types from openapi.yml
+# 代码生成（绝不手改产物）
+./shared/management/http/api/generate.sh   # 从 openapi.yml 生成 REST 类型
 ./shared/management/proto/generate.sh
 ./shared/signal/proto/generate.sh
 ./client/proto/generate.sh
 ./flow/proto/generate.sh
 
-# Run locally (lab only, never on a machine you rely on)
+# 本地运行（只在自己的实验环境，绝不在依赖的机器上）
 sudo ./client/netbird up --log-level debug --log-file console
-sudo ./client/netbird down                   # teardown: restores routing, firewall, DNS
+sudo ./client/netbird down                   # 拆解：恢复路由、防火墙、DNS
 ./signal/signal run --log-level debug --log-file console
 ./management/management management --log-level debug --log-file console --config ./management.json
 ```
 
-`netbird up` needs root and rewrites the host's routing table, firewall rules,
-DNS configuration, and WireGuard® interface. Run it only in a disposable test
-environment (a VM, container, or throwaway host) that you can rebuild, never on
-a workstation or server whose connectivity matters. Run `sudo netbird down`
-before you stop working, before rebuilding the binary, and on every failure
-path, so the host's networking state is restored instead of left half-applied.
-See [Pitfalls](#pitfalls) for why cleanup on every exit path matters.
+本 fork 的客户端构建必须带 `GOPROXY=https://goproxy.cn,direct`：默认的 `proxy.golang.org`
+在本网络下极慢（实测 20 秒只下到几十个模块元数据文件），换镜像后完整构建一次通过。
 
-## Structure
+`netbird up` 需要 root，并且会重写宿主的路由表、防火墙规则、DNS 配置与 WireGuard® 接口。
+只在可重装的测试环境（VM、容器、一次性机器）里跑，绝不在你自己依赖其网络的工作站或服务器上跑。
+收工前、重编二进制前、以及**每一条失败路径**上都要 `sudo netbird down`，让宿主的网络状态被恢复
+而不是半应用地留着。为什么每条退出路径都要清理，见 [坑](#坑)。
+
+### 各平台构建
+
+| 平台 | 命令 |
+|---|---|
+| Windows（本机） | `cd client; $env:CGO_ENABLED='0'; $env:GOPROXY='https://goproxy.cn,direct'; go build .` |
+| 交叉编译检查 | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./client/...`、`GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./client/...` |
+| 桌面 UI | `cd desktop-ui; ./gradlew :composeApp:compileKotlinDesktop`（KMP 下 `compileKotlin` 是歧义任务） |
+
+## 仓库结构
 
 ```text
 netbird/
 ├── client/              NetBird agent
 │   ├── cmd/             agent CLI
-│   ├── internal/        agent business logic (engine, peer, dns, routemanager, ...)
-│   ├── server/          daemon for background execution
-│   ├── proto/           daemon gRPC protos
-│   ├── iface/           WireGuard® interface management
-│   ├── firewall/        nftables, iptables, pf, WFP, userspace backends
-│   ├── ssh/             built-in SSH server and client
-│   ├── ui/              desktop UI (Wails v3 + React)
-│   ├── android/, ios/   mobile bindings
-│   ├── wasm/            WebAssembly build
-│   └── mdm/, system/    MDM policy, host information
-├── management/          control plane
-│   └── server/          account, peer, groups, networks, posture, permissions,
-│                        settings, store, http (REST), idp, integrations, migration
-├── signal/              handshake broker (peer/, server/)
-├── relay/               relay service (protocol/, server/, healthcheck/)
-├── proxy/               identity-aware proxy (llm/, acme/, accesslog/, middleware/, tcp/, udp/)
-├── agent-network/       Agent Network overview
-├── shared/              imported by both agent and services
-│   ├── management/      proto/, client/, http/api (OpenAPI + generated types)
-│   ├── signal/          proto/, client/
+│   ├── internal/        agent 业务逻辑（engine、peer、dns、routemanager……）
+│   ├── server/          后台运行的 daemon
+│   ├── proto/           daemon gRPC proto
+│   ├── iface/           WireGuard® 接口管理
+│   ├── firewall/        nftables、iptables、pf、WFP、userspace 后端
+│   ├── ssh/             内置 SSH 服务端与客户端
+│   ├── ui/              上游桌面 UI（Wails v3 + React，**不是**本 fork 的基线）
+│   ├── android/, ios/   移动端绑定
+│   ├── wasm/            WebAssembly 构建
+│   └── mdm/, system/    MDM 策略、主机信息
+├── management/          控制平面
+│   └── server/          account、peer、groups、networks、posture、permissions、
+│                        settings、store、http（REST）、idp、integrations、migration
+├── signal/              握手撮合（peer/、server/）
+├── relay/               relay 服务（protocol/、server/、healthcheck/）
+├── proxy/               身份感知代理（llm/、acme/、accesslog/、middleware/、tcp/、udp/）
+├── agent-network/       Agent Network 概述
+├── shared/              agent 与服务共同引用
+│   ├── management/      proto/、client/、http/api（OpenAPI + 生成的类型）
+│   ├── signal/          proto/、client/
 │   └── relay/, auth/, sshauth/, metrics/
-├── e2e/                 end-to-end suites and harness
+├── e2e/                 端到端测试集与 harness
 ├── encryption/, dns/, route/, stun/, sharedsock/, util/, flow/
-├── infrastructure_files/  docker compose and getting-started templates
-└── release_files/       files packaged into releases
+├── infrastructure_files/  docker compose 与快速上手模板
+└── release_files/       打进发行包的文件
 ```
 
-## Where to look
+本 fork 额外增加：
 
-| Task                        | Location                                                     |
-| --------------------------- | ------------------------------------------------------------ |
-| REST API / OpenAPI          | `shared/management/http/api/` + `management/server/http/`    |
-| Management gRPC protocol    | `shared/management/proto/`                                   |
-| Signal protocol             | `shared/signal/proto/`                                       |
-| Daemon IPC protocol         | `client/proto/`                                              |
-| Peer connection and NAT     | `client/internal/peer/`                                      |
-| Network map handling        | `client/internal/engine.go`, `shared/management/networkmap/` |
-| Routing                     | `client/internal/routemanager/`, `route/`                    |
-| Firewall backends           | `client/firewall/`                                           |
-| DNS                         | `client/internal/dns/`, `dns/`                               |
-| WireGuard® interface        | `client/iface/`                                              |
-| Persistence and migrations  | `management/server/store/`, `management/server/migration/`   |
-| IdP integrations            | `management/server/idp/`                                     |
-| Permissions model           | `management/server/permissions/`                             |
-| LLM routing / Agent Network | `proxy/internal/llm/`, `agent-network/`                      |
-| End-to-end tests            | `e2e/`                                                       |
+```text
+desktop-ui/              桌面 UI（Kotlin / Compose Multiplatform，Windows 优先）
+patchdoc/                本 fork 补丁集的变更记录与复现步骤
+.ai/skill/               按任务加载的 agent 技能（.github/skills 是指向它的符号链接）
+```
 
-## Security
+## 去哪里找
 
-### Never fail open
+| 任务 | 位置 |
+|---|---|
+| REST API / OpenAPI | `shared/management/http/api/` + `management/server/http/` |
+| Management gRPC 协议 | `shared/management/proto/` |
+| Signal 协议 | `shared/signal/proto/` |
+| daemon IPC 协议 | `client/proto/` |
+| peer 连接与 NAT | `client/internal/peer/` |
+| network map 处理 | `client/internal/engine.go`、`shared/management/networkmap/` |
+| 路由 | `client/internal/routemanager/`、`route/` |
+| 防火墙后端 | `client/firewall/` |
+| DNS | `client/internal/dns/`、`dns/` |
+| WireGuard® 接口 | `client/iface/` |
+| 持久化与迁移 | `management/server/store/`、`management/server/migration/` |
+| IdP 集成 | `management/server/idp/` |
+| 权限模型 | `management/server/permissions/` |
+| LLM 路由 / Agent Network | `proxy/internal/llm/`、`agent-network/` |
+| 端到端测试 | `e2e/` |
+| **本 fork** 的实例身份补丁 | `client/iface/device/`、`client/internal/dns/host_windows.go`、`client/internal/profilemanager/config.go` |
+| **本 fork** 的桌面 UI | `desktop-ui/`（规则在 `desktop-ui/AGENTS.md`） |
+| **本 fork** 的技能与踩坑 | `.ai/skill/`（清单见 `.ai/skill/README.md`） |
 
-When a security check — access control, an IP restriction, an auth decision —
-hits an error such as an unparseable value, an unavailable lookup, or a state it
-does not recognize, it must **deny**. Never skip the check or allow the request
-through because the check itself failed, and make the `default` and unknown cases
-of a security-related `switch` deny rather than fall through.
+## 安全
 
-### Daemon RPC input is untrusted
+### 绝不 fail open
 
-The agent runs as root (LocalSystem on Windows), so a daemon RPC crosses a
-privilege boundary: treat every field as untrusted input rather than as something
-the UI or CLI validated on the way in.
+当安全校验 —— 访问控制、IP 限制、认证判定 —— 遇到错误（值解析不了、查询不可用、
+状态不认识）时，它必须**拒绝**。绝不因为校验本身失败就跳过校验或放行请求，
+安全相关的 `switch` 里 `default` 与未知分支也必须拒绝，而不是掉到下面继续走。
 
-When you add or change an RPC, ask what the handler does with caller input while
-running as root. If the answer touches a filesystem path, a URL or host, or a
-privileged state change, it needs a gate **in the handler** — a check in the client
-that normally calls it is not a check at all.
+### daemon RPC 的输入不可信
 
-- **A caller-supplied path the daemon opens.** Never `os.Open` it as root.
-  Constrain it, then open it *as the caller* with `ipcauth.OpenOwnedFile`, which
-  opens `O_NOFOLLOW`, requires a regular file, and refuses a file the caller does
-  not own — so a symlink or hardlink aimed at a root-only file is rejected.
-- **A caller-supplied URL or host the daemon fetches.** Restrict the scheme and
-  allow only known hosts for unprivileged callers. Prefer a lexical host
-  allowlist plus TLS verification over "resolve the host, then reject private
-  IPs": the resolve-then-trust pattern has a DNS-rebinding race (public IP at
-  check time, attacker IP at connect time), while a name allowlist has no IP
-  check to race. Never accept `http://` where `https://` is expected.
-- **A privileged state change** (SSH root login, management URL, deregistration)
-  gates on the caller identity from `ipcauth.CallerIdentity(ctx)`.
+agent 以 root 身份运行（Windows 上是 LocalSystem），所以一条 daemon RPC 跨越了特权边界：
+把每个字段都当成不可信输入，而不是「UI 或 CLI 已经校验过了」。
 
-Caller identity comes from the kernel — `SO_PEERCRED`, `LOCAL_PEERCRED`, or the
-named-pipe client token — and never from an RPC field. When
-`ipcauth.CallerIdentity` reports that it could not determine an identity, **deny**;
-do not fall back to treating the caller as the transport peer.
+新增或修改 RPC 时，先问：handler 以 root 身份拿调用方输入做什么。如果答案涉及文件路径、
+URL 或主机名、或者特权状态变更，那么**闸门必须放在 handler 里** —— 放在「通常调用它的那个
+客户端」里的检查不算检查。
 
-## Agent conventions
+- **调用方给路径、daemon 去打开。** 绝不以 root 直接 `os.Open`。先约束路径，再用
+  `ipcauth.OpenOwnedFile` **以调用方身份**打开：它以 `O_NOFOLLOW` 打开、要求是普通文件、
+  并拒绝调用方并不拥有的文件 —— 于是指向 root-only 文件的符号链接或硬链接会被挡下。
+- **调用方给 URL 或主机、daemon 去抓取。** 限制 scheme，非特权调用方只允许已知主机。
+  优先「按名字做词法白名单 + TLS 校验」，而不是「先解析域名再拒绝私有 IP」：
+  后者有 DNS rebinding 竞态（校验时是公网 IP，连接时是攻击者 IP），名字白名单则没有 IP 可竞态。
+  该用 `https://` 的地方绝不接受 `http://`。
+- **特权状态变更**（SSH root 登录、management URL、注销）要基于
+  `ipcauth.CallerIdentity(ctx)` 给出的调用方身份来闸门。
 
-### Three networking modes
+调用方身份来自内核 —— `SO_PEERCRED`、`LOCAL_PEERCRED`、或命名管道的客户端令牌 ——
+**绝不来自 RPC 字段**。当 `ipcauth.CallerIdentity` 报告无法确定身份时，**拒绝**；
+不要退化成把调用方当成传输对端。
 
-Where packets actually flow depends on the mode the agent is running in. The
-three are not interchangeable, so establish which one a change applies to — and
-what it should do in the other two — before you write it.
+### 本 fork 的额外提醒
 
-- **kernel mode** (Linux only): in-kernel WireGuard®. The kernel handles both
-  peer-to-peer and routed traffic, and ACLs are iptables or nftables rules. The
-  client programs kernel facilities but never sees the traffic itself.
-- **userspace mode** (wireguard-go with a TUN): wireguard-go runs in-process. The
-  kernel handles peer-to-peer traffic once it leaves the TUN, while routed traffic
-  — exit nodes and network routes — goes through the userspace forwarder, which
-  terminates the connection and re-establishes it over OS sockets. Used on
-  platforms without kernel WireGuard® or when the user opts out.
-- **netstack mode**: wireguard-go in-process with no TUN and no kernel
-  networking. The forwarder does all routing by stitching userspace sockets, and
-  listeners such as the embedded SSH and DNS servers bind on a gVisor netstack.
-  Used where the process cannot create a TUN device, such as the embedded client
-  (`client/embed/`) and the WASM build.
+多实例部署下，每条启动脚本都要导出 `NB_STATE_DIR` 与 `NB_NRPT_KEY_PREFIX`；
+命名管道名用 `npipe://netbird-<名>`。**不要为了「方便」把 daemon 改成监听回环 TCP**：
+回环 TCP 不携带调用方身份，上面那套闸门会全部失效。
+细节与证据见 [本 fork 的改动](#本-fork-的改动)。
 
-### The overlay interface is not "WireGuard"
+## agent 约定
 
-Do not put "WireGuard" in identifiers or comments unless the code is genuinely
-coupled to WireGuard® specifically — a wireguard-go call, a handshake field, a
-kernel WireGuard® netlink attribute. For the interface, the host, peers, or
-traffic in general, say "the NetBird interface", "the interface", or "the overlay".
-Most firewall, routing, and DNS code is transport-agnostic, so a WireGuard®
-reference there is simply inaccurate and rots as the transports change.
+### 三种组网模式
 
-### IPv6 is a soft feature
+包到底从哪走，取决于 agent 跑在哪种模式下。三者不可互换，所以动手前先确定改动适用于哪种模式、
+另外两种模式下应该怎样。
 
-The IPv6 overlay is opt-in dual-stack, and capability can change at runtime. Treat
-it as soft rather than a requirement:
+- **内核态（kernel mode，仅 Linux）**：内核里的 WireGuard®。点对点流量与转发流量都由内核处理，
+  ACL 就是 iptables 或 nftables 规则。客户端只编程内核设施，自己看不到流量。
+- **用户态（userspace mode，wireguard-go + TUN）**：wireguard-go 跑在进程内。点对点流量离开 TUN
+  之后由内核处理；转发流量（exit node 与 network route）走用户态的 forwarder —— 它终结连接，
+  再用操作系统套接字重新建立。用于没有内核 WireGuard® 的平台，或用户显式选择时。
+- **netstack 模式**：wireguard-go 在进程内，没有 TUN，也没有内核网络。forwarder 全靠拼接
+  用户态套接字完成路由，内置 SSH 与 DNS 服务这类 listener 绑在 gVisor netstack 上。
+  用于无法创建 TUN 设备的场景，例如嵌入式客户端（`client/embed/`）与 WASM 构建。
 
-- Gate local v6 paths on the interface accessor (`wgIface.Address().HasIPv6()`),
-  not on raw state fields, and skip the v6 path when the host has no v6 rather
-  than returning an error.
-- Treat an empty or unparseable peer v6 address as "no v6 for that peer" and skip
-  it, keeping the v4 path working.
-- Never let a missing v6 break v4. Fail-closed is for security checks; a
-  capability mismatch skips the v6 work and carries on.
+### 覆盖接口不等于「WireGuard」
 
-### Environment variables
+除非代码确实与 WireGuard® 这个实现耦合（调用 wireguard-go、某个握手字段、某个内核
+WireGuard® netlink 属性），否则不要在标识符或注释里写 "WireGuard"。指接口、主机、peer、
+或泛指的流量时，说「NetBird 接口」「覆盖接口」或「覆盖网络」。防火墙、路由、DNS 代码大多与
+传输方式无关，在那里写 WireGuard® 是不准确的，而且会随传输方式演进而腐烂。
 
-Name the variable in a constant and parse booleans with `strconv.ParseBool` rather
-than comparing strings inline, so an unexpected value is logged instead of
-silently meaning false:
+### IPv6 是软特性
+
+IPv6 覆盖是 opt-in 的双栈，且能力在运行期会变。把它当软特性而非前提：
+
+- 本地 v6 路径用接口访问器判断（`wgIface.Address().HasIPv6()`），不要读裸状态字段；
+  宿主没有 v6 时**跳过** v6 路径，而不是返回错误。
+- peer 的 v6 地址为空或解析不了，就当作「该 peer 没有 v6」跳过，保持 v4 路径可用。
+- **绝不让缺失的 v6 破坏 v4。** fail-closed 是给安全校验的；能力不匹配时跳过 v6 的活儿继续走。
+
+### 环境变量
+
+变量名放进常量，布尔值用 `strconv.ParseBool` 解析，不要内联比较字符串 ——
+这样异常取值会被记日志，而不是默默当成 false：
 
 ```go
 const EnvDisableFeature = "NB_DISABLE_FEATURE"
@@ -265,97 +267,78 @@ func isDisabledByEnv() bool {
 }
 ```
 
-### Validating against protocol specs
+本 fork 自己的两个变量同理，已经写成常量并集中在各自文件里：
+`client/iface/device/windows_guid.go` 的 `envWintunGUID`、`client/internal/dns/host_windows.go`
+的 `envNRPTKeyPrefix`。
 
-When a change depends on what a protocol actually mandates, read the specification
-text from the [IETF datatracker](https://datatracker.ietf.org/) rather than a
-summary, and check that you have the current RFC — the widely cited one for a
-protocol is often superseded. Cite the section, not just the document, so a
-reviewer can jump straight to the rule.
+### 按协议规范校验
 
-## Repo-wide principles
+当改动取决于协议到底要求什么时，去 [IETF datatracker](https://datatracker.ietf.org/) 读规范原文，
+不要读二手总结；并且确认拿到的是**当前**那份 RFC —— 一个协议被广泛引用的常常是已被取代的版本。
+引用时要给到**章节号**而不只是文档号，这样 reviewer 能直接跳到那一条。
 
-1. **Run `go fmt` on every modified Go file.** Formatting is not optional.
-2. **Zero unaddressed linter warnings.** Fix what `golangci-lint` reports on code
-   you touch, and delete imports, helpers, and parameters your refactor orphaned.
-   Exception: unused parameters in shared code may be consumed by builds outside
-   this repository — do not remove them, ask instead.
-3. **Function comments are mandatory for exported functions**, written as full
-   sentences with a period, starting with the identifier name.
-4. **Prefer private functions and constants.** Export only what a caller outside
-   the package genuinely needs.
-5. **Early returns and guard clauses.** Handle errors and edge cases first
-   instead of nesting `if`/`else` chains.
-6. **Split complex functions.** If a function trips a complexity warning, break
-   it into named helpers rather than silencing the warning.
-7. **Avoid LLM-slop tells:** em dashes, hedging narration, restating the diff in
-   prose, trailing summaries. Defaults, not absolute bans. Applies to code,
-   comments, commit messages, and PR descriptions alike.
-8. **Concurrency: do a two-pass race analysis after every change** that touches
-   shared state, including reads of existing maps and slices. Guard them with a
-   mutex (or an atomic or channel where that fits better), keep critical
-   sections short, and run `go test -race` on the touched packages. See
-   [Concurrency and lifecycle](#concurrency-and-lifecycle) for the failure modes
-   to check for.
-9. **Cross-platform builds must keep working.** The agent targets Linux, macOS,
-   Windows, FreeBSD, Android, and iOS. When you add a platform-specific file,
-   add the counterpart or a build-tagged fallback for the others.
-10. **Never hand-edit generated files.** Change the source and regenerate.
-11. **Never log secrets** — private keys, setup keys, tokens, PAT values — and
-    keep peer IPs and hostnames out of logs above debug level.
+## 全仓原则
 
-## Type safety
+1. **每个改过的 Go 文件都要 `go fmt`。** 格式不是可选项。
+2. **linter 警告零残留。** 修掉 `golangci-lint` 在你碰到的代码上报告的问题，并删掉重构后
+   变成孤儿的 import、helper 与参数。例外：共享代码里的未使用参数可能被仓库外的构建消费 ——
+   别删，先问。
+3. **导出函数必须有注释**，完整句子、以句号结尾、以标识符名开头。
+4. **优先私有函数与常量。** 只导出包外调用方真正需要的东西。
+5. **早返回与守卫子句。** 先处理错误与边界情况，不要写层层嵌套的 `if`/`else`。
+6. **拆开复杂函数。** 触发复杂度警告就拆成有名字的 helper，而不是静音警告。
+7. **避免 LLM 腔：** em dash、预设式铺垫、把 diff 用散文复述一遍、结尾再多一段总结。
+   这是默认偏好而非绝对禁令，适用于代码、注释、提交信息与 PR 描述。
+8. **并发：每次改动共享状态之后都做两遍竞态分析**，包括读既有的 map 与 slice。
+   用 mutex（或更合适的 atomic、channel）保护，临界区保持短，并在被改的包上跑 `go test -race`。
+   要检查的失败模式见 [并发与生命周期](#并发与生命周期)。
+9. **跨平台构建必须继续可用。** agent 面向 Linux、macOS、Windows、FreeBSD、Android、iOS。
+   新增平台相关文件时，要给它补齐其他平台的对应实现或带 build tag 的兜底。
+10. **绝不手改生成文件。** 改源头再重新生成。
+11. **绝不记录机密** —— 私钥、setup key、token、PAT —— peer IP 与主机名不要出现在 debug 以上的日志里。
 
-**No bare primitives for domain concepts.** A `string` parameter for an account
-ID next to a `string` parameter for a peer ID is two bugs waiting to happen,
-because the compiler cannot catch the swap. Declare the type once and use it
-throughout, converting only at the boundaries where data enters or leaves —
-protobuf, gRPC, HTTP, an external library.
+## 类型安全
+
+**领域概念不要用裸基本类型。** 一个 `string` 参数是 account ID，旁边另一个 `string` 参数是
+peer ID，这是两个等着发生的 bug，因为编译器抓不到这种互换。类型声明一次，全程使用，
+只在数据进出的边界上转换 —— protobuf、gRPC、HTTP、外部库。
 
 ```go
 type ServiceID string
 type AccountID string
 
-// Internal: typed all the way through
+// 内部：全程强类型
 func (r *Router) RemoveRoute(host SNIHost, svcID ServiceID) { ... }
 
-// Proto boundary: convert once, on the way in and on the way out
+// proto 边界：进出各转换一次
 svcID := ServiceID(mapping.GetId())
 req.ServiceId = string(svcID)
 ```
 
-- **IP addresses are `netip.Addr`**, not `string` and not `net.IP`. Parse at the
-  boundary and pass the typed value inward.
-- **Always `Unmap()`** after parsing an address, after converting from `net.IP`,
-  and after extracting one from `RemoteAddr()`. This normalizes a v4-mapped v6
-  address (`::ffff:10.1.2.3`) to plain v4 so IPv4 rules match it. A stored or
-  compared mapped address silently fails to match those rules.
-- **Ports are `uint16`** internally; use `int` only where a library forces it and
-  convert immediately.
-- **Enums are a typed string with constants**, so the valid set is discoverable
-  and a typo fails to compile.
-- **Map keys follow the same rule**, and must be a real type (`type ServiceID
-  string`) rather than an alias (`type serviceID = string`) — an alias silently
-  accepts bare strings.
+- **IP 地址用 `netip.Addr`**，不要 `string`，也不要 `net.IP`。在边界解析，把类型化的值往里传。
+- **解析之后、从 `net.IP` 转换之后、从 `RemoteAddr()` 取出之后，一律 `Unmap()`。**
+  它把 v4-mapped v6 地址（`::ffff:10.1.2.3`）归一成纯 v4，这样 IPv4 规则才能匹配上。
+  存下来或用于比较的映射地址会静默地匹配不上那些规则。
+- **端口内部用 `uint16`**；只在库强制要求的地方用 `int`，并且立刻转换。
+- **枚举用「字符串类型 + 常量」**，让合法取值可被发现，让拼写错误编译不过。
+- **map key 同理**，而且必须是真类型（`type ServiceID string`）而不是别名
+  （`type serviceID = string`）—— 别名会静默接受裸字符串。
 
-## Concurrency and lifecycle
+## 并发与生命周期
 
-Beyond the mutex hygiene in the principles above, check for these failure
-modes.
+除了上面原则里的 mutex 卫生，还要检查这些失败模式。
 
-- **Never read a struct field inside a goroutine** when another goroutine may nil
-  or reassign it. Pass the value as a parameter, or capture it into a local before
-  launching. This matters most when `Stop()` nils a field without waiting for the
-  goroutine to finish.
+- **绝不在 goroutine 里读结构体字段**，当另一个 goroutine 可能把它置 nil 或换掉时。
+  把值当参数传进去，或者启动前捕获到局部变量。这在 `Stop()` 会置 nil 字段而不等 goroutine
+  结束时最要紧。
 
   ```go
-  go func(ifaceName string) {   // good: passed in, cannot be nilled underneath
+  go func(ifaceName string) {   // 好：参数传入，下面不可能被置 nil
       m.Start(ctx, ifaceName)
   }(iface.Name())
   ```
 
-- **Never wait on a channel while holding a lock the sender needs.** Copy what you
-  need out from under the lock, release it, then wait.
+- **绝不在持有「发送方也需要」的锁时等 channel。** 需要的东西在锁下拷出来、放锁、再等。
 
   ```go
   func (m *Manager) Stop() {
@@ -369,46 +352,38 @@ modes.
   }
   ```
 
-- **`Stop`/`Close` must be idempotent** — guard on an already-stopped flag or a
-  nil cancel — and must release the state they guarded. Clear maps and caches;
-  a cancelled goroutine holding a live map still pins that memory. Note that a
-  nil map only panics on writes; reads and iteration behave like an empty map,
-  so where post-close use must be rejected, check the stopped flag explicitly.
-- **Publish coupled state only after every fallible step succeeds.** When several
-  fields form an invariant, build them into locals and assign them to the receiver
-  at the end. Assigning as you go leaves the object half-initialized when a later
-  step fails, so a readiness predicate reports ready while a coupled field is nil.
-  If an earlier step already had an external side effect — a created chain, an
-  opened handle, an inserted rule — roll it back before returning the error.
-- **Clean up what you own on constructor error paths.** Once a constructor has
-  started something, every later error path must undo it: cancel a goroutine and
-  wait for it to exit, stop a ticker, close a watcher. The object is never
-  returned, so its `Close` will never run.
-- **A failed `Start` must undo everything it started.** When a component brings up
-  several subsystems in sequence — connection manager, watchers, routing, DNS,
-  flow, persisted state — a failure partway through has to tear down the ones
-  already running, not just close the handle the error came from. Put the
-  already-started guard *before* that teardown path, so a rejected second `Start`
-  cannot dismantle the one that is running.
+- **`Stop`/`Close` 必须幂等** —— 用已停止标志或 nil cancel 守卫 —— 并且要释放它守护的状态。
+  清空 map 与缓存；被取消的 goroutine 若抓着一个仍存活的 map，那份内存就一直被钉住。
+  注意 nil map 只在写时 panic，读与遍历表现得像空 map，所以「close 之后再使用必须被拒」的地方
+  要显式检查停止标志。
+- **所有可能失败的步骤都成功之后，再发布耦合状态。** 若干字段构成一条不变式时，
+  先把它们构建到局部变量里，最后一次性赋给 receiver。边算边赋会在后面的步骤失败时留下
+  半初始化的对象，于是就绪判定报告「就绪」而某个耦合字段还是 nil。
+  如果之前的步骤已经产生外部副作用 —— 建了链、开了句柄、插了规则 —— 返回错误前先回滚。
+- **构造函数的错误路径上清理自己占有的一切。** 构造函数一旦启动了什么，后面每条错误路径都要撤销：
+  取消 goroutine 并等它退出、停 ticker、关 watcher。对象永远不会被返回，它的 `Close` 也就永远不会执行。
+- **一次失败的 `Start` 必须撤销它启动的一切。** 组件按序拉起多个子系统（连接管理器、watcher、
+  路由、DNS、flow、持久化状态）时，中途失败要把已经跑起来的都拆掉，而不是只关报错的那个句柄。
+  「已经启动」的守卫要放在这条拆解路径**之前**，这样第二次 `Start` 被拒时不会把正在跑的那个拆掉。
 
-## Error handling
+## 错误处理
 
-Use single-assignment form when the error is only needed inside the `if`:
+错误只在 `if` 内部用到时，用单赋值形式：
 
 ```go
-// Good
+// 好
 if err := someCall(); err != nil {
     return fmt.Errorf("context: %w", err)
 }
 
-// Bad - unnecessary split
+// 差 - 不必要的拆分
 err := someCall()
 if err != nil {
     return fmt.Errorf("context: %w", err)
 }
 ```
 
-Use multiple assignment when the value is needed after the block:
+错误块之后还要用值，才用多赋值：
 
 ```go
 result, err := someCall()
@@ -417,24 +392,22 @@ if err != nil {
 }
 ```
 
-Add short, meaningful context, and **do not** start `fmt.Errorf` messages with
-obvious words like "failed to" or "error":
+加简短而有意义的上下文，并且**不要**以 "failed to"、"error" 这类废话开头：
 
 ```go
-// Good
+// 好
 return fmt.Errorf("parse remote address: %w", err)
 return fmt.Errorf("listen on %s: %w", addr, err)
 
-// Bad
+// 差
 return fmt.Errorf("failed to parse remote address: %w", err)
 return fmt.Errorf("error listening on %s: %w", addr, err)
 
-// "failed" is fine in log messages
+// 日志里写 "failed" 没问题
 log.Debugf("failed to parse remote address: %v", err)
 ```
 
-Skip the wrapping when a function only extracts or delegates and the wrap would
-add nothing:
+函数只是提取或转调、包装也不增加信息时，不要包：
 
 ```go
 func parseAddr(addr string) (string, int, error) {
@@ -446,34 +419,28 @@ func parseAddr(addr string) (string, int, error) {
 }
 ```
 
-Log the errors you choose not to act on:
+选择不处理的错误要记日志：
 
-- `log.Debugf()` for errors that do not affect program flow but help debugging.
-- `log.Tracef()` for very verbose errors that would otherwise spam logs.
-- **Never ignore** errors from writes, network sends, or critical cleanup.
-- Close errors may be ignored for read-only operations; log them at debug for
-  writes.
+- `log.Debugf()`：不影响程序流程、但有助于排查的错误。
+- `log.Tracef()`：非常啰嗦、否则会刷屏的错误。
+- **绝不忽略**写、网络发送、关键清理的错误。
+- 只读操作的 Close 错误可以忽略；写操作的按 debug 记。
 
-**Do not log and return the same error.** It gets reported twice, from two places,
-and the second reader cannot tell whether it happened once or twice. Return it and
-let the caller decide. The exception is an API handler that has already written a
-response. Internal helpers return errors rather than logging and swallowing them.
+**不要既记日志又返回同一个错误。** 它会被两处各报一次，而第二个读者无法判断到底发生了一次还是两次。
+返回它，让调用方决定。例外是已经写出响应的 API handler。内部 helper 返回错误，而不是记日志并吞掉。
 
-**Never return a typed nil as an error.** A nil `*MyError` stored in an `error`
-interface is not nil, so `err != nil` is true and callers take the failure path on
-success. Return the error only where it is actually set:
+**绝不把带类型的 nil 当 error 返回。** 一个 nil 的 `*MyError` 存进 `error` 接口之后不是 nil，
+于是 `err != nil` 为真，调用方在成功时走了失败路径。只在真的被赋值的地方返回错误：
 
 ```go
-if _, err := conn.Write(buf); err != nil {   // good
+if _, err := conn.Write(buf); err != nil {   // 好
     return err
 }
 return nil
 ```
 
-**Accumulate with `multierror` when an operation should continue past individual
-failures** — teardown, cleanup, or setup where partial success is acceptable.
-`client/errors.FormatErrorOrNil` returns nil for an empty accumulator, so callers
-still see a plain nil on full success:
+**一次操作应当在个别失败后继续时，用 `multierror` 累积** —— 拆解、清理，或允许部分成功的装配。
+`client/errors.FormatErrorOrNil` 对空累积器返回 nil，所以调用方在完全成功时拿到的仍是普通 nil：
 
 ```go
 func (m *Manager) Cleanup() error {
@@ -487,110 +454,83 @@ func (m *Manager) Cleanup() error {
 }
 ```
 
-| Scenario              | Approach              | Why                                       |
-| --------------------- | --------------------- | ----------------------------------------- |
-| Cleanup / teardown    | Accumulate            | Clean up as much as possible              |
-| Setup with rollback   | Abort on first error  | Partial state is invalid; undo what stuck |
-| Setup with partial OK | Accumulate            | Degraded operation is still useful        |
+| 场景 | 做法 | 原因 |
+|---|---|---|
+| 清理 / 拆解 | 累积 | 尽可能多清掉一些 |
+| 装配需要回滚 | 首个错误即中止 | 半成品状态无效；撤掉已生效的 |
+| 装配允许部分成功 | 累积 | 降级运行仍然有用 |
 
-## Comments
+## 注释
 
-Comment the **why**, never the **what**. Default to no comment, and add one only
-when a hidden constraint or workaround would surprise a future reader. Never
-reference the current task, PR, or your own changes in a comment.
+注释写 **why**，绝不写 **what**。默认不写，只在某个隐性约束或 workaround 会让后来的读者意外时才加。
+绝不在注释里提到当前任务、PR 或你自己的改动。
 
 ```go
-// Bad - trailing comments explaining the obvious
-defer localConn.Close() // Close the connection
-if err != nil {         // Check if error occurred
+// 差 - 解释显而易见之事的尾随注释
+defer localConn.Close() // 关闭连接
+if err != nil {         // 检查是否出错
 
-// Good
+// 好
 defer localConn.Close()
 
-// Good - explains a non-obvious constraint
-// Use incremental checksum update per RFC 1624 for performance.
+// 好 - 解释非显而易见的约束
+// 按 RFC 1624 做增量校验和更新，为了性能。
 checksum = updateChecksum(checksum, oldPort, newPort)
 ```
 
-### Length budget
+### 长度预算
 
-Neither of these is linter-enforced, so they are conventions the surrounding code
-mostly follows rather than hard limits:
+下面两条都**不是** linter 强制的，是周边代码大体遵守的约定而非硬上限：
 
-- **Around 90 characters per line.** Wrap the comment rather than running well past
-  it.
-- **Roughly 250 characters per comment**, about three wrapped lines. Doc comments
-  on exported identifiers may exceed it when the API genuinely needs the
-  explanation; inline comments inside a function body rarely should.
+- **每行约 90 字符。** 该换行就换行，不要大幅超出。
+- **每条注释约 250 字符**，约三行。导出标识符的文档注释在 API 确实需要解释时可以超出；
+  函数体里的行内注释很少应该超出。
 
-The budget is a smell detector, not a rule to game. Do not compress a needed
-explanation into cryptic shorthand to fit — if a block of code needs more than
-250 characters of prose, the code is doing too much. Fix the code:
+预算是异味探测器，不是拿来钻的空子。不要为了塞进去而把必要的解释压成神秘缩写 ——
+如果一块代码需要超过 250 字符的散文，那是代码做得太多了。修代码：
 
-- **Extract a named function.** A well-named function replaces the comment: the
-  name says *what*, the body shows *how*, and the comment you no longer write
-  was the *what* anyway. Clean Code calls this "explain yourself in code".
-- **Extract a named constant or predicate.** `if isExpiredSetupKey(key)` needs
-  no comment; `if key.ExpiresAt.Before(now) && !key.Revoked && key.UsageLimit > 0`
-  does.
-- **Keep the surviving comment for the why** — the RFC, the kernel quirk, the
-  ordering constraint. That part is usually one or two lines.
+- **抽出有名字的函数。** 好名字替代注释：名字说 *what*，函数体展示 *how*，你省下的那条注释
+  本来也只是在讲 *what*。Clean Code 称此为「用代码解释自己」。
+- **抽出有名字的常量或谓词。** `if isExpiredSetupKey(key)` 不需要注释；
+  `if key.ExpiresAt.Before(now) && !key.Revoked && key.UsageLimit > 0` 需要。
+- **把剩下的注释留给 why** —— RFC、内核怪癖、顺序约束。这部分通常一两行。
 
-### Long switch and if/else chains
+### 长 switch 与 if/else 链
 
-A `switch` whose cases carry multi-line explanations is the usual place this
-budget is breached, and the comment is a symptom. In order of preference:
+带多行解释的 `switch` 是最常突破预算的地方，而那条注释本身就是症状。按优先级：
 
-1. **Extract each case body into a named function.** The case becomes one line,
-   the name carries the meaning, and the switch reads as a table of contents.
-2. **Replace the switch with a lookup table** — `map[Kind]handlerFunc` — when the
-   branches are uniform. Adding a case stops meaning editing a growing function.
-3. **Replace conditional with polymorphism** when branches vary by type and the
-   same switch shape starts appearing in more than one place. Clean Code's rule
-   of thumb: tolerate a switch statement if it appears **once**, is buried in a
-   factory that returns an interface, and no other switch dispatches on the same
-   type. A second switch over the same enum is the signal to introduce the
-   interface.
+1. **把每个 case 体抽成有名字的函数。** case 变成一行，名字承载含义，switch 读起来像目录。
+2. **用查表替代 switch** —— 分支形制统一时用 `map[Kind]handlerFunc`。加一个分支就不再意味着
+   改一个越来越大的函数。
+3. **分支随类型变化、且同样的 switch 形状开始出现在第二处时，用多态替代条件。**
+   Clean Code 的经验法则：一个 switch 语句若只出现**一次**、藏在一个返回接口的工厂里、
+   没有别处对同一类型做 dispatch，那可以容忍。对同一个枚举的第二个 switch 就是引入接口的信号。
 
-Do not restructure a switch purely to satisfy the budget when the cases are one
-line each and self-evident — a flat, boring `switch` over an enum is fine and
-needs no comments at all.
+case 各一行且自明时，不要纯粹为了满足预算去重排 —— 一个扁平的、无聊的、对枚举做 dispatch 的
+`switch` 很好，完全不需要注释。
 
-Explanatory comments in tests are welcome — they document the scenario being set
-up, and the 250-character budget does not apply to them.
+测试里的解释性注释是受欢迎的 —— 它们记录被搭建的场景，250 字符预算不适用于测试。
 
-## Testing
+## 测试
 
-- **Unit tests** live beside the code as `_test.go`. `make test-unit` runs the
-  host-safe set with `-tags devcert` and no sudo.
-- **Privileged tests** carry the `privileged` build tag and mutate host
-  networking. They run through `make test-privileged`, inside a Docker container
-  with `NET_ADMIN`. Never bypass that harness by running them directly on the
-  host.
-- **End-to-end suites** live in `e2e/` with a shared harness.
-- **Test real behavior, not API existence.** Assert on the observable end state
-  a consumer would see — bytes that arrived, the packet after translation, the
-  row after the write — not merely that a method exists or returns an error.
-- **Avoid mocks for code we own.** Exercise the real store, manager, or
-  controller and assert what the caller actually receives.
-- **`require` for setup and preconditions, `assert` for the conditions under
-  test.** Use `require` whenever a later line would panic or be meaningless
-  otherwise.
-- **Message guidance:** optional for `NoError`/`Error`; always give context for
-  comparison, boolean, and collection assertions.
-- **Reproduce a bug before fixing it.** Write the test, watch it fail *for the
-  reason you expect* — a test that fails for an unrelated reason proves nothing —
-  then apply the fix and confirm it passes. Add the thin surrounding cases while
-  you are there.
-- **Use `t.Setenv`** rather than `os.Setenv` so the previous value is restored on
-  cleanup. To test the unset case, call `t.Setenv` first to register the restore,
-  then `os.Unsetenv`.
-- **Prefer `t.Cleanup` over `defer`** in any test with parallel subtests: the
-  parent function returns, running its `defer`s, while parallel subtests are
-  still suspended. Sequential subtests finish inside `t.Run`, so `defer` is safe
-  there, but `t.Cleanup` works in both cases.
-- **Explanatory comments in tests are welcome.** Describe the scenario being set
-  up; the comment budget below does not apply to them.
+- **单元测试**与代码同目录，`_test.go`。`make test-unit` 跑宿主安全的那一套，
+  带 `-tags devcert`、不需要 sudo。
+- **privileged 测试**带 `privileged` build tag，会改动宿主网络。它们通过 `make test-privileged`
+  在带 `NET_ADMIN` 的 Docker 容器里跑。**绝不在宿主上直接跑来绕过那套 harness。**
+- **端到端测试集**在 `e2e/`，共用一套 harness。
+- **测真实行为，不测 API 是否存在。** 断言消费方能观察到的最终状态 —— 到达的字节、
+  翻译之后的那个包、写入之后的那一行 —— 而不只是某个方法存在或返回了错误。
+- **自己拥有的代码避免用 mock。** 用真实的 store、manager、controller，并断言调用方实际收到什么。
+- **`require` 用于装配与前置条件，`assert` 用于被测条件。** 后续一行会 panic 或失去意义的
+  地方一律用 `require`。
+- **断言消息：** `NoError`/`Error` 可选；比较、布尔、集合断言一律给上下文。
+- **先复现再修。** 先写测试，看着它因为**你预期的原因**失败 —— 因为不相干原因失败的测试什么都证明不了 ——
+  然后修，再确认通过。顺手把周边那几个薄薄的用例补上。
+- **用 `t.Setenv`** 而不是 `os.Setenv`，让原值在清理时恢复。要测未设置的情形，
+  先调 `t.Setenv` 登记恢复动作，再 `os.Unsetenv`。
+- **有并行子测试时优先 `t.Cleanup` 而不是 `defer`**：父函数返回时执行 `defer`，而并行的子测试
+  还挂起着。顺序执行时 `defer` 安全，但 `t.Cleanup` 两种情形都对。
+- **测试里的解释性注释受欢迎。** 描述被搭建的场景。
 
 ```go
 server, err := StartTestServer()
@@ -602,182 +542,494 @@ assert.NoError(t, err)
 assert.Equal(t, expectedResult, result, "Result should match expected")
 ```
 
-## Pitfalls
+本 fork 的补丁期望有对应的测试：`client/internal/profilemanager`（字段被发布）、
+`client/internal/dns`（前缀与派生路径一起重算）。前缀从 `const` 改成 `var` 之后，
+**重算的完整性**是最值得断言的一点。
 
-- **The agent runs as root.** Anything touching routing, firewall, DNS, or the
-  interface can take a user's machine off the network. Prefer a reversible
-  change and make sure cleanup runs on every exit path.
-- **Management has two account loaders** (GORM and pgx). Adding a relation to an
-  account often means updating both, or it silently comes back empty in
-  production.
-- **`go test ./...` without `-tags devcert` skips tests** that need the
-  development certificate. Use `make test-unit`.
-- **`make lint` only checks the diff against `origin/main`.** CI runs
-  `make lint-all`; run it too before pushing a large change.
-- **Protos are consumed by released clients.** An old agent must keep working
-  against a new Management, so fields are added, never renumbered or removed.
-- **Windows requires the wintun driver**, and the daemon serves a named pipe
-  (`npipe://netbird`) rather than loopback TCP. Loopback TCP carries no caller
-  identity, so privileged operations are refused over it.
+## 坑
 
-## Commits, PRs, releases
+- **agent 以 root 运行。** 任何触碰路由、防火墙、DNS、接口的改动都可能让用户的机器断网。
+  优先做可逆的改动，并确保每条退出路径都执行清理。
+- **Management 有两个账户加载器**（GORM 与 pgx）。给 account 加关联时往往两边都要改，
+  否则生产环境里会静默返回空。
+- **不带 `-tags devcert` 的 `go test ./...` 会跳过**需要开发证书的测试。用 `make test-unit`。
+- **`make lint` 只查相对 `origin/main` 的 diff。** CI 跑的是 `make lint-all`；大改动推送前也跑一次。
+- **proto 被已发布的客户端消费。** 旧 agent 必须能对上新 Management，所以字段只增，
+  绝不重新编号或删除。
+- **Windows 需要 wintun 驱动**，且 daemon 提供的是命名管道（`npipe://netbird`）而不是回环 TCP。
+  回环 TCP 不携带调用方身份，所以特权操作经它一律被拒。
 
-- **PR titles must start with a bracketed tag.** Before you propose a title,
-  **read [`.github/workflows/pr-title-check.yml`](.github/workflows/pr-title-check.yml)
-  and take the allowed tags from the `allowedTags` array in that file.** It is
-  the only source of truth, it changes as components are added, and the check
-  runs on every title edit — a tag that is not in that array is a red build. Do
-  not rely on a list memorized from anywhere else, including this file.
+本 fork 的多实例部署另有几条坑（完整清单与排障手法见
+[本 fork 的改动](#本-fork-的改动) 与 `.ai/skill/netbird-multi-instance/`）：
+
+- **`wintun.dll` 必须与 exe 同目录**，否则报 `Error loading wintun.dll`。
+- **实例目录绝不能放在 `%PROGRAMDATA%\Netbird` 树内**：主实例的 MDM 策略重载 ticker 每 60 秒
+  监视该树，实例在里面写状态会被当成策略变更，主实例随即拆掉并重建自己的引擎。
+- **配置 JSON 不能带 BOM**（`invalid character '\ufeff'`）。PowerShell 的 `Set-Content -Encoding UTF8`
+  会加，用 `UTF8Encoding($false)` 写字节。
+- **强杀会让该实例的 wintun PnP 设备处于坏状态**，下次启动报
+  `create tun device: ... cannot find the file specified`。
+- **删 wintun PnP 设备前先确认归属。** 这个设备类是与无关软件共享的（实测某台机器上列着
+  Tailscale 的适配器），判归属看 `FriendlyName` 并在候选二进制里搜 GUID。
+
+## 提交与发布
+
+- **PR 标题必须以方括号 tag 开头。** 提标题之前，**读
+  [`.github/workflows/pr-title-check.yml`](.github/workflows/pr-title-check.yml)，
+  从里面的 `allowedTags` 数组取允许的 tag。** 那是唯一事实源，它会随组件增减而变，
+  且该检查在每次标题编辑时都跑 —— 不在数组里的 tag 就是红。不要依赖从别处（包括本文件）
+  记下来的列表。
 
   ```text
   [client] Authorize daemon IPC callers by their local identity
   [management,client] Add MDM policy support
   ```
 
-  Multiple tags are comma-separated inside one pair of brackets. Match the tag
-  to the component you actually changed, not to the one you read the most.
+  多个 tag 逗号分隔，放在同一对方括号里。tag 要对上你实际改的组件，而不是你读得最多的那个。
 
-- **Use the repository's PR template.** Fill in
-  [`.github/pull_request_template.md`](.github/pull_request_template.md) rather
-  than replacing it with your own summary: describe the change, link the issue,
-  tick the checklist honestly (including "ran locally" and "single purpose"),
-  and complete the documentation section. Do not tick a box you have not
-  verified, and do not delete rows that do not apply — the docs gate in CI reads
-  that section and fails when it is missing.
+- **用仓库的 PR 模板。** 填
+  [`.github/pull_request_template.md`](.github/pull_request_template.md)，不要用自己的摘要替掉它：
+  描述改动、链接 issue、诚实地勾选清单（包括「本地跑过」「单一目的」）、并完成文档那一节。
+  没验证过的框不要勾，不适用的行也不要删 —— CI 里的文档 gate 会读那一节，缺了就红。
 
-- **Keep the PR description short.** Under 1000 words on top of the template's
-  own text, and usually far less — a few paragraphs. Reviewers read the diff;
-  the description exists to explain what the diff cannot say for itself. This is
-  well below what an agent will produce by default, so cut before you post.
+- **PR 描述要短。** 模板正文之外不超过 1000 词，通常远少于此 —— 几段就够。reviewer 会读 diff，
+  描述存在的意义是讲 diff 自己说不清的事。这远低于 agent 的默认产出量，所以贴出去之前先砍。
 
-- **Body: why before what.** Lead with the problem and the reason for this
-  approach, then the shape of the change. No bullet list of files changed, no
-  per-function walkthrough, no restating the diff in prose, no trailing summary
-  section, no self-congratulatory closing line.
+- **正文：why 先于 what。** 先讲问题与选这条路的原因，再讲改动的形状。不要文件清单、
+  不要逐函数走读、不要用散文复述 diff、不要结尾总结节、不要自我表扬式的收尾句。
 
-- **No `Co-Authored-By` or tool-attribution trailers in the PR description**,
-  and none in commits either. Contributors own their contributions. Whatever
-  tooling produced the diff, the person opening the PR is its author: they have
-  read every line, they can explain why it works, they can answer review
-  questions without going back to a model, and they are accountable for the
-  consequences of merging it. Do not add a trailer, footer, or description line
-  that spreads that ownership onto a tool.
+- **PR 描述里不要 `Co-Authored-By` 或工具署名 trailer**，提交里同理。贡献归属作者本人：
+  无论什么工具产出了这份 diff，开 PR 的人就是它的作者 —— 他读过每一行、能解释为什么成立、
+  能不看模型就回答 review 问题，并为合并后的后果负责。不要加任何把这份归属摊给某个工具的
+  trailer、footer 或描述行。
 
-- **Commit subjects follow the same `[scope] Subject` convention.** Keep the
-  subject short, and use the body for why before what. No bullet lists of files
-  changed.
+- **提交标题同样遵循 `[scope] Subject` 约定。** 标题要短，正文用来说 why 先于 what。
+  不要文件清单。
 
-- **Push review fixes as separate commits.** The PR is squashed on merge, so
-  there is no reason to rewrite history mid-review; many small commits make the
-  re-review readable.
+- **review 修补单独提交。** PR 合并时会 squash，所以 review 期间没有理由改写历史；
+  多个小提交让复审更易读。
 
-- **Do not force-push a branch that is under review.** A force-push detaches
-  existing review comments from the lines they were written against, destroys
-  the "changes since your last review" diff a reviewer relies on, and discards
-  the CI history that showed which commit broke what. Add commits instead —
-  including for fixups and reverts. Force-push only when there is no
-  alternative: a rebase to clear a genuine conflict, or removing a secret or a
-  large binary that was committed by mistake. When you must, ask the user first,
-  then say so in a PR comment so reviewers know their anchors moved. Never
-  force-push `main`, and never force-push a branch you do not own.
+- **不要强推正在 review 的分支。** 强推会让已有 review 评论脱离它们所在的行，毁掉 reviewer
+  依赖的「上次 review 之后的改动」diff，也丢掉「哪个提交弄坏了什么」的 CI 历史。
+  追加提交 —— fixup 与 revert 也一样。只有在别无选择时才强推：rebase 解决真实冲突，
+  或移除误提交的机密、大文件。必须强推时，先问用户，再在 PR 里留一条评论告知 reviewer
+  他们的锚点移动了。**绝不强推 `main`，也绝不强推不属于你的分支。**
 
-- **One PR, one purpose.** Split refactors out of fixes and fixes out of
-  features.
+- **一个 PR 一个目的。** 重构与修复分开，修复与功能分开。
 
-- **Keep the PR small.** Size is the single strongest predictor of how long a PR
-  waits. Aim for **under ~400 changed lines across under ~20 files**; past
-  roughly **1000 lines or 50 files** a community PR is likely to be sent back to
-  be split, or left unreviewed until it is. Large PRs from outside the core team
-  may be blocked outright when the size was never agreed in the ticket —
-  reviewing a sprawling change against a privileged networking daemon is a
-  security risk in itself, not just a time cost.
+- **PR 要小。** 体积是 PR 等待时间的最强预测因子。目标 **400 行以内、20 个文件以内**；
+  超过大约 **1000 行或 50 个文件**，社区 PR 很可能被退回拆分，或者在拆开之前一直没人看。
+  团队外的大 PR，若体积从没在 ticket 里谈过，可能直接被挡 —— 对着一个特权网络守护进程
+  review 一大坨改动，本身就是安全风险，不只是时间成本。
 
-  Judge the size by hand-written code: exclude generated output, `go.sum`,
-  vendored files, and test fixtures from the estimate, but do not use their
-  presence to argue a 3000-line PR is small.
+  体积按手写代码估算：生成产物、`go.sum`、vendored 文件、测试 fixture 不计入，
+  但也不要拿它们的存在来论证一个 3000 行的 PR 很小。
 
-  When a change genuinely cannot be small — a protocol migration, a
-  cross-component rename — agree the split in the ticket **before** writing
-  code, and land it as a sequence of PRs that each build, test, and make sense
-  on their own. Propose that split to the user rather than opening one large PR
-  and hoping.
+  改动确实小不了时 —— 协议迁移、跨组件重命名 —— 在 ticket 里**先把拆法谈定**再写代码，
+  落成一串各自能构建、能测试、能独立说通的 PR。把拆法提给用户，而不是开一个大 PR 指望运气。
 
-  Prefer GitHub's stacked pull requests for such a sequence, rather than
-  hand-managing base branches: open each PR against the branch below it instead of
-  `main`, so every PR's diff shows only its own change. Merging a layer retargets
-  the PRs above it, and branch protections and required checks on the base branch
-  still apply to each one.
+  这类序列优先用 GitHub 的 stacked pull request，而不是手工维护 base 分支：每个 PR 开在它下面
+  那个分支上而不是 `main`，于是每个 PR 的 diff 只显示自己那层。合并一层会自动把上面的 PR
+  retarget，base 分支上的分支保护与必需检查对每个 PR 依旧生效。
 
-- **User-facing changes need a docs PR** in
-  [netbirdio/docs](https://github.com/netbirdio/docs), linked from the PR
-  description.
+- **面向用户的改动需要配一份 docs PR**，在
+  [netbirdio/docs](https://github.com/netbirdio/docs)，并从 PR 描述里链接过去。
 
-## After you push: CI and review bots
+## 推送之后
 
-Opening the PR is not the end of the task. Watch the run, read what the bots
-say, and drive the PR to green before you report the work as done.
+开 PR 不是任务的终点。看着跑、读 bot 说了什么、把 PR 推到绿再报告完成。
 
 ```bash
-gh pr checks <pr>            --watch    # all checks, live
-gh run view <run-id> --log-failed       # only the failing steps
-gh pr view <pr> --comments              # bot and human review comments
+gh pr checks <pr>            --watch    # 全部检查，实时
+gh run view <run-id> --log-failed       # 只看失败的步骤
+gh pr view <pr> --comments              # bot 与人的 review 评论
 ```
 
-**Never report a change as finished while checks are pending or red**, and never
-describe a red PR as passing. If you ran out of turn before CI finished, say
-which checks were still running.
+**检查还在 pending 或红着时，绝不报告改动已完成**，也绝不把红的 PR 说成通过。
+若你在 CI 出结果前就结束了这一轮，说清楚哪些检查还在跑。
 
-### The checks
+### 检查有哪些
 
-- **Go tests** — `golang-test-{linux,darwin,windows,freebsd}.yml`, sharded per
-  component. A failure in a component you did not touch is usually a real
-  interaction, not noise; read the log before assuming flake.
-- **golangci-lint** — `golangci-lint.yml` runs the full repository, while
-  `make lint` only checks your diff. A clean local lint does not guarantee green
-  CI on a large change.
-- **PR Title Check** — `pr-title-check.yml`, see above.
-- **Codecov** — uploaded from the Linux test workflow with per-component flags
-  (`unit,client`, `unit,management`, `unit,relay`, `unit,proxy`, `unit,signal`,
-  `integration,management`). Coverage on new code should not go backwards. Add
-  tests for the paths you introduced; do not adjust thresholds or exclude files
-  to clear the report.
-- **CodeRabbit** — configured in [`.coderabbit.yaml`](.coderabbit.yaml): `chill`
-  profile, auto-review on every non-draft PR, TypeScript/JavaScript/SVG paths
-  filtered out. Chat auto-reply is on, so `@coderabbitai` in a comment reaches
-  it.
-- **SonarCloud** — project `netbirdio_netbird`, quality gate on new code (bugs,
-  vulnerabilities, code smells, duplication, coverage).
-- **Snyk** — dependency and code scanning.
+- **Go 测试** —— `golang-test-{linux,darwin,windows,freebsd}.yml`，按组件分片。你没碰的组件失败
+  往往是真实的相互作用，不是噪声；先读日志再判定 flake。
+- **golangci-lint** —— `golangci-lint.yml` 跑全仓，而 `make lint` 只查你的 diff。
+  大改动上本地 lint 干净不等于 CI 会绿。
+- **PR Title Check** —— `pr-title-check.yml`，见上。
+- **Codecov** —— 由 Linux 测试流程上传，按组件打 flag（`unit,client`、`unit,management`、
+  `unit,relay`、`unit,proxy`、`unit,signal`、`integration,management`）。新代码的覆盖率不应倒退。
+  为你引入的路径补测试；不要调阈值或排除文件来清报告。
+- **CodeRabbit** —— 配置在 [`.coderabbit.yaml`](.coderabbit.yaml)：`chill` 档，非 draft PR 自动 review，
+  TypeScript/JavaScript/SVG 路径被过滤。chat 自动回复开着，评论里 `@coderabbitai` 能叫到它。
+- **SonarCloud** —— 项目 `netbirdio_netbird`，质量门针对新代码（bug、漏洞、代码异味、重复、覆盖率）。
+- **Snyk** —— 依赖与代码扫描。
 
-Sonar and Snyk report as GitHub App checks rather than workflows in this
-repository, so their detail lives on the PR check, not in the Actions logs.
+Sonar 与 Snyk 在本仓库以 GitHub App check 的形式报告，而不是 workflow，所以细节在 PR check 上，
+不在 Actions 日志里。
 
-### Handling bot findings
+### 怎么处理 bot 的发现
 
-- **Read every comment and act on it.** Either fix it, or reply with the reason
-  it does not apply. Do not bulk-resolve threads to clear the count, and do not
-  silently ignore a finding because the check is advisory.
-- **Bots are frequently wrong here.** NetBird has privileged, platform-specific,
-  and concurrency-heavy code that static analysis reads poorly. A confident
-  CodeRabbit or Sonar comment can still be nonsense. Verify the claim against
-  the code before you change anything — never edit correct code just to silence
-  a bot.
-- **Security findings get the opposite default.** For a Snyk or Sonar
-  vulnerability, or a CodeRabbit comment about authentication, authorization,
-  certificate verification, or key handling, assume it is real until you have
-  disproved it. Surface it to the user rather than dismissing it yourself.
-- **A new vulnerable dependency is a stop.** Bumping or replacing dependencies
-  needs the user's decision, as above.
-- **Never change a workflow, threshold, lint exclusion, or bot config to make a
-  check pass.** If a check is genuinely wrong, say so and let the user decide.
-- **Do not paper over flakes with blind re-runs.** Identify the failure first. If
-  it is a known flake, name it; if you cannot tell, report it as unresolved
-  rather than re-running until it goes green.
+- **每条评论都读、都处理。** 要么修掉，要么回复说明为什么不适用。不要为了清数字批量 resolve，
+  也不要因为某个检查只是建议性质就默默忽略。
+- **bot 在这里经常是错的。** NetBird 有大量特权、平台相关、并发密集的代码，静态分析读得很糟。
+  一条自信的 CodeRabbit 或 Sonar 评论也可能完全站不住。改之前先对着代码核实 ——
+  绝不为了让 bot 闭嘴去改正确的代码。
+- **安全类发现默认反过来：** 对 Snyk 或 Sonar 的漏洞，或 CodeRabbit 关于认证、授权、证书校验、
+  密钥处理的评论，在你证伪之前都当它是真的。把它交给用户，而不是自己判掉。
+- **新出现的脆弱依赖是停手信号。** 升级或替换依赖需要用户决定，见上。
+- **绝不为了让检查通过而改 workflow、阈值、lint 排除或 bot 配置。** 如果某个检查确实错了，
+  说出来并让用户决定。
+- **不要靠盲目重跑掩盖 flake。** 先定位失败。若它是已知 flake，点名；若你分不出来，
+  就按「未解决」上报，而不是重跑到绿。
 
-## Discussion and support
+## 讨论与支持
 
-- Discussions: <https://github.com/netbirdio/netbird/discussions>
-- Slack: <https://docs.netbird.io/slack-url>
-- Docs: <https://docs.netbird.io>
-- Security: <https://github.com/netbirdio/netbird/security/policy> — never in public
-- Contribution process: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Discussions：<https://github.com/netbirdio/netbird/discussions>
+- Slack：<https://docs.netbird.io/slack-url>
+- 文档：<https://docs.netbird.io>
+- 安全：<https://github.com/netbirdio/netbird/security/policy> —— 绝不要发在公开渠道
+- 贡献流程：[CONTRIBUTING.md](CONTRIBUTING.md)
+
+## 本 fork 的改动
+
+本仓库是 `netbirdio/netbird` 的**公开 fork**（`Shinglem/netbird`），在上游之上携带一套 opt-in 的小补丁集，
+目的是让**多个 NetBird 实例能在同一台 Windows 主机上同时运行**：各有自己的 wintun 适配器、
+路由表项、DNS 命名空间和状态目录。
+
+**在改动 `client/iface/device/`、`client/internal/dns/`、`client/internal/profilemanager/`
+下任何内容之前，以及在构建或部署客户端二进制之前，请先读完本节。**
+
+### 上游为什么做不到
+
+上游支持在 profile 之间**切换**，不支持**并存**：有两处状态是**进程级、且启动时即固定**，
+第二个实例（也就是第二个进程）一定会来抢。其余状态都能用普通参数隔离
+（`--config`、`--daemon-addr`、`--log-file`、`NB_STATE_DIR`）。
+
+| 单例 | 位置 | 两个实例共用时的症状 |
+|---|---|---|
+| wintun 适配器 GUID（硬编码 `{f2f29e61-…}`） | `client/iface/device/device_windows.go` 读 `CustomWindowsGUIDString`，而上游生产代码从不给它赋值 | 两个进程要同一个 GUID，于是第二个接口建不起来 |
+| NRPT 键命名空间（`NRPTKeyPrefix = "NetBird-"`） | `client/internal/dns/host_windows.go`，清理时按前缀枚举整机策略存储 | 一个实例退出会删掉另一个实例的 DNS 规则 |
+
+### 改了什么
+
+#### 1. `client/iface/device/windows_guid.go`（新增）
+
+上游已经声明了扩展点，只是没人用，所以这里不另造机制，只加 setter：
+
+```go
+func SetWintunGUID(guid string) {
+	if guid == "" {
+		return
+	}
+	CustomWindowsGUIDString = guid
+}
+```
+
+另有 `init()` 读 `NB_WINDOWS_GUID` 作为环境变量兜底。
+
+**这个文件刻意不带 build tag。** 它写的那个变量只被 `device_windows.go` 读，但一个带 build tag
+的 setter 会迫使每个调用方都带上对应的 tag。在所有平台都定义它（非 Windows 上同样有定义，
+代价是一个没人读的包级变量），才能让 `profilemanager` 里的调用点保持平台无关。
+
+#### 2. `client/internal/dns/host_windows.go`
+
+前缀及由它派生的一切，从 `const` 变成 `var`：
+
+```go
+const defaultNRPTKeyPrefix = "NetBird-"   // 上游原值，仍是默认值
+
+var (
+	NRPTKeyPrefix    = defaultNRPTKeyPrefix
+	nrptMatchKeyName = NRPTKeyPrefix + "Match"
+
+	dnsPolicyConfigMatchPath          = DNSPolicyConfigRoot + `\` + nrptMatchKeyName
+	gpoDnsPolicyConfigMatchPath       = GPODNSPolicyConfigRoot + `\` + nrptMatchKeyName
+	dnsPolicyConfigExemptLocalPath    = DNSPolicyConfigRoot + `\` + NRPTKeyPrefix + `ExemptLocal`
+	gpoDnsPolicyConfigExemptLocalPath = GPODNSPolicyConfigRoot + `\` + NRPTKeyPrefix + `ExemptLocal`
+)
+```
+
+加上 `SetNRPTKeyPrefix` / `setNRPTKeyPrefix`（后者重算**全部五个**派生值），以及读
+`NB_NRPT_KEY_PREFIX` 的 `init()`。`NRPTKeyPrefix` 保留导出名，因为 `debug_windows.go` 会读它。
+
+⚠️ **`const` 改 `var` 是本补丁最危险的部分。** 没有任何东西保证那些派生路径只在 `init()` 跑完之后
+才被读。若将来有改动让别的包的 `init()` 期间读它们，读到的值就取决于包的初始化顺序。
+
+#### 3. `client/internal/dns/nrpt_prefix_other.go`（新增）
+
+```go
+//go:build !windows
+
+package dns
+
+// SetNRPTKeyPrefix is a no-op off Windows. NRPT is a Windows-only mechanism:
+// elsewhere the resolver configuration is not keyed by a prefix this package
+// picks, so there is nothing to namespace.
+//
+// It is defined here so that the profile-config loader can call it on every
+// platform without a build tag of its own.
+func SetNRPTKeyPrefix(string) {}
+```
+
+#### 4. `client/internal/profilemanager/config.go`
+
+`Config` 增加两个字段（都是 `omitempty`，零值等价于上游行为）：
+
+```go
+	// WintunGUID ...
+	WintunGUID string `json:",omitempty"`
+
+	// NRPTKeyPrefix ...
+	NRPTKeyPrefix string `json:",omitempty"`
+```
+
+并由 `readConfig` 发布它们：
+
+```go
+func (config *Config) publishInstanceIdentity() {
+	device.SetWintunGUID(config.WintunGUID)
+	dns.SetNRPTKeyPrefix(config.NRPTKeyPrefix)
+}
+```
+
+**调用点的位置才是关键决策。** 它在 `readConfig`、**不在** `apply()` —— `apply()` 也会对一次性的
+探针配置和基线配置执行，而从一份只被「看一眼」的配置里写进程级状态，会把某个 profile 的身份
+泄漏进正在运行的那个。
+
+### 优先级
+
+```text
+profile 配置字段  >  NB_WINDOWS_GUID / NB_NRPT_KEY_PREFIX  >  内置默认值
+```
+
+配置优先，因为配置会覆盖环境变量（环境变量在 `init()` 里读，配置在其后）。每一层的空值都被忽略，
+所以配置字段的零值恰好等于上游行为。
+
+⚠️ **「配置优先」不等于「有配置就够了」。** 见下面那节时序缺陷：跑在 `readConfig` 之前的路径
+永远看不到配置值，对那些路径而言**环境变量是必需的**。
+
+### 硬规则
+
+1. **`NB_NRPT_KEY_PREFIX` 必须导出，不能只配置。** 配置值由 `readConfig` 发布，而它跑在不干净关闭的
+   恢复路径**之后**。凡是设置了 `NB_STATE_DIR` 的启动脚本，都必须同时设置它。
+2. **进程级设置一律从 `readConfig` 发布，绝不要从 `apply()`。** 新增此类设置时，先枚举所有跑在
+   `readConfig` **之前**的路径（包的 `init()`、状态管理器的清理、不干净关闭的恢复），再决定用
+   哪个通道触达它们。
+3. **保持非 Windows 平台可构建。** 两个 setter 在所有平台都有定义，调用方不需要 build tag。
+   验证时要用 `GOOS=linux` 与 `GOOS=darwin` 构建，不能只验 Windows。
+4. **不要把 NRPT 前缀改回 `const`。** `NRPTKeyPrefix` 与由它派生的四条路径必须在每次前缀变化时
+   一起重算；把它们拆到一个 const 加一个 var 里，正是它们彼此漂移的原因。
+5. **这些改动不会让客户端变得便携。** 服务注册、计划任务、wintun 内核驱动、NRPT 注册表项与
+   wintun PnP 设备依然是系统状态。不要把结果描述成「绿色安装」或「便携安装」。
+6. **保持 opt-in、保持零默认行为变化。** 两个字段都 `omitempty`，同一份二进制仍可作为普通客户端使用。
+
+### 启动时序缺陷：为什么环境变量是必需的
+
+**严重度：高。** 只设配置字段就部署，会让第二个实例删掉**第一个**实例的 DNS 规则。
+
+当守护进程没能干净退出 —— 强杀、崩溃、断电 —— `state.json` 里仍留着 `dns_state` 条目。
+下次启动时，状态管理器会在**读取 profile 配置之前**执行恢复：
+
+```text
+daemon 启动
+  |
+  +-- statemanager 载入 state.json
+  |     dns_state 存在 -> dns.ShutdownState.Cleanup()
+  |        -> registryConfigurator.restoreUncleanShutdownDNS()
+  |           -> removeDNSMatchPolicies()
+  |              *** 按 NRPTKeyPrefix 删键；此刻前缀还是默认的 "NetBird-" ***
+  |              *** 于是它删掉了「另一个」实例的键                        ***
+  |
+  +-- readConfig
+        -> publishInstanceIdentity()
+           -> dns.SetNRPTKeyPrefix("NBAlt-<名>-")   <-- 太晚了
+```
+
+删除动作本身正确，作用域也对 —— `listNRPTRuleKeys` 是按前缀过滤的。缺陷只在于那一刻前缀还没被设过。
+
+**症状：** 启动第二个实例后，第一个实例一直健康、`Connected` 也没掉，却失去了域名解析，
+它自己的日志里什么都没有（不是它删的）。
+
+**为什么不能靠「让恢复路径晚点读前缀」来修：** 恢复路径**必须**跑在 `readConfig` 之前，
+因为 `readConfig` 决定哪个 profile 是激活的，而恢复要清理的是**上一次**运行留下的东西。
+
+**回归测试（必须做，因为正常退出会完全掩盖这个 bug）：**
+
+```powershell
+# 1. 两套键都在
+Get-DnsClientNrptRule | Where-Object Name -like 'NetBird-*'
+Get-DnsClientNrptRule | Where-Object Name -like 'NBAlt-*'
+# 2. 强杀第二个实例，让它来不及清理，从而留下 dns_state
+#    再启动它
+# 3. 断言：它的 daemon.log 里出现 "cleaning up state dns_state"
+#    断言：Get-DnsClientNrptRule 仍列出【两套】命名空间
+#    断言：两个 mesh 名都能 Resolve-DnsName 成功
+```
+
+### 部署形态
+
+```text
+<root>\                             # 本机取值见 .local/environment.md
+  |- netbird-multi.exe              # 一份自编译二进制服务所有实例
+  |- wintun.dll                     # 必须与 exe 同目录
+  |- profiles\<name>\
+       |- daemon.ps1                # 计划任务指向它
+       |- instance.json             # 脚本元数据：mode、iface、wgPort、guid、nrptPrefix、domains
+       |- config\default.json       # --config；一份配置 = 一个实例的完整身份
+       |- runfiles\{state.json, active_profile.json, daemon.log}
+```
+
+启动一个实例：
+
+```powershell
+$env:NB_STATE_DIR       = '<root>\profiles\<name>\runfiles'
+$env:NB_NRPT_KEY_PREFIX = 'NBAlt-<name>-'      # 必需 —— 见上面的时序缺陷
+& '<root>\netbird-multi.exe' service run `
+    --config '<root>\profiles\<name>\config\default.json' `
+    --daemon-addr 'npipe://netbird-<name>' `
+    --log-file '<root>\profiles\<name>\runfiles\daemon.log'
+```
+
+`config\default.json` 至少要包含各实例互不相同的 `WgIface` / `WgPort` / `WintunGUID` /
+`NRPTKeyPrefix`，且 `DisableDNS: false`（让实例自己管 DNS）。管理服务器域名也要与其他实例不同 ——
+两个网络用同一个域名会在客户端解析器里互相打架。**改配置要改文本，绝不要经 `ConvertFrom-Json` 往返**：
+`ManagementURL` 是 `url.URL`，其结构形式无法往返，`PrivateKey` 必须逐字节一致。
+
+编排脚本不在本仓库：`netbird-multi.ps1`（`up` / `down` / `status` / `list` / `update-alt`）与
+构建脚本 `build-netbird.ps1` 在技能库 `mesh-vpn-management` 下，默认
+`-RepoDir <repo>`、`-DeployDir <deploy-root>`（本机取值见 `.local/environment.md`）。**重起一个 Source 模式的实例必须显式
+写 `-Mode Source`**：`up` 不读 `instance.json` 里已存的 mode，默认 Patch 会按 Patch 起重并覆盖
+`instance.json`（`nrptPrefix` 与 `domains` 随之丢失）。
+
+### 验收
+
+```powershell
+# 两个适配器都在
+Get-NetAdapter -IncludeHidden | Where-Object InterfaceDescription -match WireGuard
+
+# 每个实例一套 NRPT 命名空间
+Get-DnsClientNrptRule | Where-Object { $_.Name -like 'NetBird-*' -or $_.Name -like 'NBAlt-*' }
+
+# 两个网络都能解析 —— 而且是系统层解析，不是 `netbird status`
+Resolve-DnsName <主 mesh 名>
+Resolve-DnsName <第二个 mesh 名>
+```
+
+`netbird status` 不足以作为证据：它报告守护进程的视角，会在系统完全解析不了时照样显示
+`Connected`。也不要看 `Nameservers: n/n` 计数器判断 DNS —— 它数的是 netbird 托管的 nameserver，
+即使在 Custom Zones 正常工作时也读作 `0/0`。唯一的证明是真实发起一次查询。
+
+部署重新构建的二进制之前，先确认实例身份相关的符号确实在产物里 —— 一个悄悄丢了它们的构建
+照样能跑，照样用默认 GUID 与默认前缀：
+
+```bash
+grep -c WintunGUID <binary> && grep -c NRPTKeyPrefix <binary> && grep -c SetNRPTPrefix <binary>
+```
+
+### 公开仓库，不走上游流程
+
+本仓库是**公开**的（`Shinglem/netbird`），但只供自用，**不向上游提 PR**。上游的 STOP 规则
+（开票、high-risk area 先谈设计、走 CI 与 review bot 流程）**都不适用**：改这里的东西不需要先开票，
+文档用中文即可。`[scope] Subject` 的提交前缀照用；**但不加工具署名 trailer** ——
+`.githooks/commit-msg` 会拒绝（`make setup-hooks` 装上钩子之后生效）。
+
+**正因为公开，本机事实一律不进仓库。** 绝对路径、账户名、实例名、wintun GUID、mesh 域名、
+代理端口，统一放进被忽略的 `.local/`（唯一事实表 `.local/environment.md`，占位符对照
+`.local/README.md`），文档里只写 `<repo>`、`<deploy-root>`、`<instance>`、`<guid>`、`<proxy-port>`
+这类占位符。提交前自查：
+
+```bash
+git grep -nIE '[A-Za-z]:\\\\|/home/[a-z]|/Users/[A-Za-z]|/mnt/[a-z]|/s/[a-z]+/' -- ':!.local'
+```
+
+命中就改成占位符或搬进 `.local/`；历史里已经混进去的，重写后再推。
+
+唯一值得从上游保留的习惯是：这套补丁触及客户端系统集成（DNS、接口）与配置文件格式，属于上游
+眼中的高风险区 —— 所以改动时**优先复用既有扩展点、保持 opt-in、保持零默认行为变化**，
+这些习惯本身能让改动更容易验证，与是否上游无关。
+
+`patchdoc/` 是这套补丁的**变更记录与复现步骤**（含被本文件摘要掉的源码级细节与实测日志）。
+本文件是**规则**，`patchdoc/` 是**证据**；两边冲突时以本文件为准，并把 `patchdoc/` 改过来。
+
+| 路径 | 内容 |
+|---|---|
+| [`patchdoc/0001-profile-driven-instance-identity.md`](patchdoc/0001-profile-driven-instance-identity.md) | 三处代码改动的逐处说明与位置选择理由 |
+| [`patchdoc/0002-nrpt-prefix-timing.md`](patchdoc/0002-nrpt-prefix-timing.md) | 启动时序缺陷的完整机制与复现步骤 |
+| [`.ai/skill/netbird-multi-instance/`](.ai/skill/netbird-multi-instance/SKILL.md) | 部署与排障手法（含 `references/` 下的现场证据） |
+
+### 与上游同步
+
+```bash
+git remote add upstream https://github.com/netbirdio/netbird.git
+git fetch upstream
+git rebase upstream/main
+```
+
+改动集中在 4 个文件、约 140 行，冲突可能性低；若真冲突，会落在这两处：
+
+- `client/internal/profilemanager/config.go` —— `Config` 的字段区与 import 区
+- `client/internal/dns/host_windows.go` —— 前缀及其派生值由 `const` 改 `var` 的那段
+
+本 fork 不推送上游，rebase 只是为了跟上新版本。**本文件是上游 `AGENTS.md` 的中文改写版**，
+rebase 时这个文件必然冲突，解决方式是保留本文件（我们的版本），再从上游差异里挑出真正的规则变更
+补进来。
+
+## 桌面 UI
+
+本仓库新增了一个**桌面前端**：`desktop-ui/`（Kotlin / Compose Multiplatform，Windows 优先）。
+它只是已有 daemon 的客户端 —— 网络栈、DNS、路由、账号全在 daemon 里。
+
+**在改动 `desktop-ui/` 下任何内容之前，以及在给 UI 接 daemon 之前，请先读
+[`desktop-ui/AGENTS.md`](desktop-ui/AGENTS.md)** —— 那份是该层的**规则权威源**
+（定位、非目标、技术栈、契约、硬约束、验收、编码规范）。本节只放几条不可违反的摘要，
+细则不在这里重复。
+
+### 不可违反的四条
+
+1. **UI 只走 daemon 自带的 HTTP/JSON 网关**：
+   `POST http://127.0.0.1:<port>/daemon.DaemonService/<Method>`（grpc-gateway，
+   `--enable-json-socket --json-socket tcp://127.0.0.1:<port>`）。
+   Windows 上 daemon 默认只监听命名管道，而 Kotlin/JVM 没有可用的 gRPC-over-named-pipe 传输 ——
+   **不要试图自己实现一条**。
+
+2. **`Up` 必须传 `async: true`**。默认 `false` 会阻塞到引擎就绪（CLI 的语义），UI 会表现为点击无反应。
+
+3. **流式 RPC 按行解析**：`SubscribeStatus` / `SubscribeEvents` 是持续输出、不会结束，
+   且 `SubscribeStatus` 首帧即当前快照。
+
+4. **Go 树只读**：`client/**/*.go`、`client/proto/**` 不改。UI 的需求优先在 UI 侧解决；
+   确需改 daemon 或 proto 的，先在 `patchdoc/` 写方案，由用户拍板，不在同一次提交里混做。
+
+（第 1、2 条的完整理由与证据行号见 `.ai/skill/netbird-desktop-ui-contract/`。）
+
+### 规则与技能在哪
+
+| 路径 | 内容 |
+|---|---|
+| [`desktop-ui/AGENTS.md`](desktop-ui/AGENTS.md) | **UI 层规则权威源**（含多实例、托盘、单实例、编码规范、验收） |
+| [`.ai/skill/README.md`](.ai/skill/README.md) | 技能清单唯一处（含 UI 用的 5 个技能、来源与同步方式） |
+| [`.ai/skill/netbird-desktop-ui-contract/SKILL.md`](.ai/skill/netbird-desktop-ui-contract/SKILL.md) | 接 daemon 的工作流与坑；`references/daemon-api.md` 是完整 RPC 与字段表 |
+| [`.ai/skill/netbird-multi-instance/SKILL.md`](.ai/skill/netbird-multi-instance/SKILL.md) | 多实例部署形态，UI 的实例发现基于它 |
+| [`.github/copilot-instructions.md`](.github/copilot-instructions.md) | VS Code / Copilot 的指针文件（不含规则内容） |
+
+### 构建与验收（UI 层）
+
+```bash
+cd desktop-ui
+./gradlew :composeApp:compileKotlinDesktop   # 快速编译检查（KMP 下 compileKotlin 是歧义任务）
+./gradlew :composeApp:run                    # 运行（需要先有带 json-socket 的 daemon）
+```
+
+验收的前提是 daemon 网关可达：
+
+```bash
+curl -s -X POST http://127.0.0.1:8471/daemon.DaemonService/Status \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+端口约定 **8471 起、每实例 +1**。完整验收表见 `desktop-ui/AGENTS.md` §7。
+
+### 与 Go 侧工作的边界
+
+- UI 是纯客户端：**不改变同一份 daemon 二进制的行为**，也不进 `client/` 的构建产物。
+- 若某个需求确实要 daemon 支持（新 RPC、新字段），按 `patchdoc/` 的既有做法处理：
+  写一份编号文档说明改了什么/为什么/怎么验收，再由用户决定是否落地。

@@ -1,0 +1,12 @@
+# 行尾：本目录的文本一律 LF（覆盖各机的 core.autocrlf）
+# 否则 core.autocrlf=true 的机器上 gradlew 会被检出成 CRLF，bash 直接报
+# `$'\r': command not found`。
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Gradle Wrapper：脚本 LF，jar 按二进制
+gradlew text eol=lf
+*.jar binary

@@ -1,0 +1,28 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "UI: 编译检查",
+      "type": "shell",
+      "command": "./gradlew :composeApp:compileKotlinDesktop --console=plain",
+      "options": { "cwd": "${workspaceFolder}/desktop-ui" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "UI: 运行",
+      "type": "shell",
+      "command": "./gradlew :composeApp:run --console=plain",
+      "options": { "cwd": "${workspaceFolder}/desktop-ui" },
+      "problemMatcher": []
+    },
+    {
+      "label": "UI: 测试",
+      "type": "shell",
+      "command": "./gradlew :composeApp:test --console=plain",
+      "options": { "cwd": "${workspaceFolder}/desktop-ui" },
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -29,7 +29,15 @@ client/client.exe
 client/.distfiles/
 infrastructure_files/setup.env
 infrastructure_files/setup-*.env
-.vscode
+.vscode/*
+# fork-local: 共享的 VS Code 工程配置要入库（上游忽略了整个 .vscode 目录）
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+
+# fork-local: 本机专属事实（绝对路径、实例名、GUID、域名、代理端口……）
+# 仓库是公开的，这些一律不入库；文档里只写占位符，取值见 .local/environment.md
+.local/
 .DS_Store
 vendor/
 /netbird

@@ -1,0 +1,61 @@
+# ============================================================================
+#  netbird-ui · 版本目录（唯一版本来源）
+#  ---------------------------------------------------------------------------
+#  规则：
+#   · 版本只在这里出现一次；模块脚本不写版本号
+#   · CMP 内部件（compose.runtime / material3 / desktop.currentOs / uiTest …）
+#     由 Compose 插件提供，**不进本文件**
+#   · 预览版（-alpha/-beta/-rc）不得进 [versions]
+#   · 版本与同版本线的另一个 CMP 项目一致（同一套镜像，便于互相印证）
+# ============================================================================
+
+[versions]
+# 语言与构建
+kotlin = "2.4.21"
+compose = "1.12.2"
+
+# 运行时
+lifecycle = "2.11.0"
+coroutines = "1.11.0"
+serialization = "1.12.0"
+# material3 1.9.0 传递依赖 kotlinx-datetime 0.7.1，与本项一起解析到官方 compat 变体
+# 0.8.0-0.6.x-compat（保留 0.6 的 Instant 等 API）。这里直接写解析结果。
+datetime = "0.8.0-0.6.x-compat"
+settings = "1.3.0"
+
+# 网络
+ktor = "3.6.0"
+
+# 日志：kotlin-logging 做门面，桌面端由 logback 落盘
+kotlin-logging = "7.0.7"
+logback = "1.5.18"
+
+[libraries]
+# --- AndroidX Lifecycle（JetBrains 的 KMP 移植）---
+lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+lifecycle-runtime-compose   = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+
+# --- 协程 ---
+kotlinx-coroutines-core  = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+
+# --- 序列化 / 时间 / 偏好 ---
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-datetime           = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
+multiplatform-settings     = { module = "com.russhwolf:multiplatform-settings", version.ref = "settings" }
+
+# --- Ktor（HTTP/JSON；只要这四件：daemon 走 grpc-gateway，不需要 WebSocket / gRPC）---
+ktor-client-core                = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-cio                 = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-serialization-json         = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+
+# --- 日志 ---
+kotlin-logging  = { module = "io.github.oshai:kotlin-logging", version.ref = "kotlin-logging" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+compose-compiler     = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+compose              = { id = "org.jetbrains.compose", version.ref = "compose" }

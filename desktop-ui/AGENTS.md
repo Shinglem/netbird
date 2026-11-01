@@ -203,6 +203,17 @@ netbird service install --enable-json-socket --json-socket tcp://127.0.0.1:8471
 
 > 端口约定：**8471 起，每实例 +1**（写进实例编排脚本；见技能 `netbird-desktop-ui-contract`）。
 
+**本机配置快照**（写 DTO / 调通道时对着真实配置，而不是照文档猜）：
+
+```powershell
+pwsh -NoProfile -File desktop-ui\scripts\sync-local-netbird.ps1
+```
+
+脚本读 `.local\env.ps1` 的实例清单，生成到 `.local\netbird\`：`instances.json`（各实例的
+daemon 地址、建议网关端口、management URL、iface/端口、当前是否在跑）、每个实例的**脱敏**配置、
+以及 `raw\`（含私钥，ACL 已收紧）。`.local/` 已被 `.gitignore` 忽略 ——
+**这些取值不得抄回仓库的任何文档**，仓库文档只写占位符（见 `.local/README.md` 的占位符表）。
+
 ---
 
 ## 6. 编码规范
@@ -247,6 +258,8 @@ GUI 级别的自动化（真实窗口驱动、截图断言）见技能 `dev-desk
 | `.ai/skill/dev-desktop-gui-e2e-testing/` | 脚本驱动真实窗口做端到端验证 |
 | `.ai/skill/global-git-ops/` | 本机 git 纪律：代理、提交前自查、上游同步 |
 | `patchdoc/` | 本 fork 的**变更记录与证据**（规则在根 `AGENTS.md` 的「本 fork 的改动」节）；UI 改动若触及 Go 侧，必须在这里追加一份 |
+| `desktop-ui/scripts/sync-local-netbird.ps1` | 把本机实例配置同步成 `.local\netbird\` 快照（脱敏副本 + `raw\` 原始副本，ACL 收紧） |
+| `.local/` | **本机专属事实（不入库）**：环境事实、实例清单、调试快照；仓库文档里的占位符取值见其 `README.md` |
 
 ---
 

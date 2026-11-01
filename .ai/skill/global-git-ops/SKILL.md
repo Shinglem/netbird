@@ -92,9 +92,9 @@ git rebase upstream/main          # 预期冲突点见 patchdoc/README.md 的「
 
 - **入库前扫描明文凭据**：按内容特征匹配（`KEY=` / `--key` / `*_TOKEN` / `PASSWORD` / 长随机串），
   出现真值先改占位符或改从环境变量读取，再 `git add`。
-- **提交信息沿用上游 Conventional Commits**：`type(scope): summary`，英文标题（与仓库历史一致，
-  便于 rebase 后仍可读）；**正文与补丁文档用中文**。类型取 `feat` / `fix` / `docs` / `refactor` /
-  `chore` / `test`。
+- **提交信息用中文**：`type(scope): 中文简述`（类型前缀保持英文，与上游历史兼容；
+  本 fork 私用、文档全中文，没必要再写英文标题）。类型取 `feat` / `fix` / `docs` / `refactor` /
+  `chore` / `test`。正文可用要点列表说明「为什么」。
 - **一次提交一件事**；不要混合「重构 + 功能」。
 - **不提交**：`build/`、`.gradle/`、`*.log`、`local.properties`、任何 token
   （`desktop-ui/.gitignore` 与根 `.gitignore` 已覆盖）。

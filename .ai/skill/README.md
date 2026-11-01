@@ -52,6 +52,9 @@ cp -r <sibling-project>/.ai/skill/compose-multiplatform-desktop .ai/skill/
 grep -rnE '\.design/|[A-Za-z]:\\\\|/[A-Za-z]/[A-Za-z]+/' .ai/skill/
 ```
 
+另外，同步来的 `SKILL.md` frontmatter 要去掉来源元数据：删 `author:`，把 `metadata.<来源库名>:`
+这一层压平成 `metadata.tags` / `metadata.related_skills`。本仓库公开，来源库名不该出现在这里。
+
 `global-git-ops` 是**改写版**：流程与坑通用，但远端、提交风格、`safe.directory` 坑都按本仓库重写，
 不要从上游整份覆盖。
 

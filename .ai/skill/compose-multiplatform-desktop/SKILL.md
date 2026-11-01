@@ -2,13 +2,11 @@
 name: compose-multiplatform-desktop
 description: "用 Compose Multiplatform 写桌面客户端：选型与桌面端坑。"
 version: 1.0.0
-author: Hermes Agent
 license: MIT
 platforms: [windows, linux, macos]
 metadata:
-  hermes:
-    tags: [Compose Multiplatform, Kotlin, 桌面客户端, 选型, 迁移, IME, 终端, Markdown 渲染]
-    related_skills: [open-source-project-evaluation, codebase-inspection]
+  tags: [Compose Multiplatform, Kotlin, 桌面客户端, 选型, 迁移, IME, 终端, Markdown 渲染]
+  related_skills: [open-source-project-evaluation, codebase-inspection]
 ---
 
 # Compose Multiplatform 桌面客户端

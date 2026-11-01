@@ -141,6 +141,12 @@ foreach ($inst in $NetbirdInstances) {
     else { Copy-Item -Path $inst.ConfigPath -Destination $rawPath -Force }
 
     # 4) 清单条目（不含任何敏感值）
+    # 与台账口径对比：现值偏离期望时告警（不阻断，配置漂移本身就是快照要记录的事实）
+    $actualManagement = Get-ManagementHost $cfg
+    if ($inst.ExpectedManagementUrl -and $actualManagement -ne $inst.ExpectedManagementUrl) {
+        Write-Warning "$($inst.Name)：management 与台账口径不一致 —— 现值 $actualManagement，台账 $($inst.ExpectedManagementUrl)"
+    }
+
     $extra = if ($inst.ProfileDir) { Read-JsonFile (Join-Path $inst.ProfileDir 'instance.json') } else { $null }
     $manifest += [ordered]@{
         name             = $inst.Name
@@ -152,6 +158,11 @@ foreach ($inst in $NetbirdInstances) {
         suggestedBaseUrl = $inst.SuggestedUrl
         jsonSocket       = $null   # 目前都没开：需要 --enable-json-socket --json-socket tcp://…
         managementUrl    = (Get-ManagementHost $cfg)
+        # 台账口径（`.local/env.ps1` 的 Expected* 字段）；不一致就是配置漂移，下面会告警。
+        expectedManagementUrl = $inst.ExpectedManagementUrl
+        managementUrlMatches  = if ($inst.ExpectedManagementUrl) { (Get-ManagementHost $cfg) -eq $inst.ExpectedManagementUrl } else { $null }
+        expectedDomain        = $inst.ExpectedDomain
+        expectedRange         = $inst.ExpectedRange
         interfaceName    = $cfg.WgIface
         wgPort           = $cfg.WgPort
         mtu              = $cfg.MTU

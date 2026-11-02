@@ -253,6 +253,32 @@ $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
 - [ ] 关键节点截图（至少：动作前、动作后）
 - [ ] 实例隔离：专用 daemon 实例 + 独立 `--json-socket` 端口 + 结束后清理，生产实例不受影响
 - [ ] 失败时能区分"注入没到"与"应用逻辑错"（临时 DEBUG 日志）
+- [ ] **目标窗口是不是提权进程？** 是就必须用管理员脚本注入（见 §2.8）
+
+---
+
+### §2.8 提权窗口无法从普通权限进程注入 ★UIPI
+
+**症状**：`SetCursorPos`/`mouse_event`/`SendInput`/`PostMessage` 全部"成功"返回，
+但光标始终停在原处（`GetCursorPos` 读到的是用户自己的位置），界面毫无反应。截图与
+`GetWindowRect` 都正常，于是很容易误判成"点错了坐标"或"应用不响应"。
+
+**判据**：`SetCursorPos(x,y)` 之后立刻 `GetCursorPos` 读回的不是 `(x,y)` —— 不是被用户抢走，
+而是被 **UIPI（User Interface Privilege Isolation）** 拒绝：低完整性进程不能向高完整性窗口
+投递输入。桌面 UI 一旦自己 `ShellExecuteExW("runas")` 提权，所有普通权限的注入脚本就全废，
+`PostMessage` 发到 Frame 也不会被 AWT 处理（该窗口没有子句柄，别指望发给 canvas）。
+
+**做法**：注入脚本本身用管理员权限启动，一次 UAC 换整段流程：
+
+```powershell
+Start-Process pwsh -ArgumentList @('-NoProfile','-File',$script,'-Key',$key) -Verb RunAs -PassThru
+```
+
+- 脚本内部先断言 `GetForegroundWindow() -eq $hwnd`，再点击；每次点击前重试直到
+  `GetCursorPos` 读回目标坐标；
+- **一次 UAC 做完整条链**（启动实例 → 等网关 → 填表 → 提交 → 截图），别一步一次；
+- 杀掉提权 UI 同样需要管理员：普通权限 `Stop-Process` 会 `Access denied`。
+- 反过来也要注意：**提权进程与普通进程的 `$env:TEMP` 未必一致**，脚本输出路径用绝对路径。
 
 ---
 

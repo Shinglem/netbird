@@ -60,6 +60,9 @@ metadata:
 | 弹出 `AlertDialog` 被终端内容遮住半截 | `SwingPanel` 是 heavyweight 组件，**永远画在 Compose 之上**；换成独立窗口的 `Dialog` 也一样被遮（实测两者都不行） | 先把 Swing 组件移出合成树（收起面板 / 切走页面）再弹框，关闭后恢复；或者在 Swing 侧用 `JOptionPane`。**根因修法**：把该区域改成 Compose 原生渲染（本项目 ADR-054 之后，两处绕法都已删除） |
 | 想用 `-Dcompose.layers.type=WINDOW` 把 Popup/Dialog 变独立窗口绕开遮挡 | **实测在 JBR 25 + CMP 1.12.2 上 app 直接 `EXCEPTION_ACCESS_VIOLATION` 崩溃**（官方也列了 Linux 渲染 #4437、显示闪烁 #4475、父窗 resize 裁剪 #4484 三个已知问题）；另一个 flag `-Dcompose.swing.render.on.graphics=true`（`ComposeFeatureFlags.useSwingGraphicsInComposePanel`）官方注明**对 `ComposeWindow`/`ComposeDialog` 无效**，只作用于嵌在 Swing 里的 `ComposePanel` | 别指望这两个 flag。要真正在互操作组件之上弹东西，只有 desktop 专属 `DialogWindow`（独立 `JDialog`）或 Swing 的 `JOptionPane`；官方立场见 compose-multiplatform#1521（"限制来自架构，看起来不可行"）与 Swing 集成教程的前提条件「应用里没有 popup / tooltip / context menu」 |
 | 设置页这类"一个大 `when` 分支"的详情面板参数爆炸 | 十几页的回调全平铺在同一个 `@Composable` 签名里，改动一次要碰三处 | 按页把回调打包成 `data class XxxPageCallbacks(val onFoo: ... = {})`，用默认值保持向后兼容 |
+| 以为 jpackage app-image 的 `runtime\` 是普通 JRE | 启动器用 JNI 直接加载 `runtime\bin\server\jvm.dll`，那个目录里**没有 `java.exe`** | 诊断启动问题别去 `runtime\bin\java.exe`；要控制台输出就生成 `--win-console` 变体，或用完整 JDK 的 `java -cp "app/*" <MainKt>` 复现 |
+| 想给 jpackage 产物改个名 | exe 名来自 `--name`（Compose 里是 `packageName`），`app\` 里的启动配置与它配套 | 改 `packageName` 重新生成，不要重命名 exe |
+| 桌面应用需要管理员，又要求登录自启不弹 UAC | 给 exe 加 `requireAdministrator` manifest 会让**每次登录**也走加载器提权 | 不给 manifest；双击时用 `ShellExecuteExW("runas")` 重启自己（弹一次），登录自启走计划任务 `HighestAvailable` + `InteractiveToken` |
 
 ## 从 Electron / Web 客户端迁移：先量后算
 

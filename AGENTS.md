@@ -983,7 +983,7 @@ rebase 时这个文件必然冲突，解决方式是保留本文件（我们的�
 （定位、非目标、技术栈、契约、硬约束、验收、编码规范）。本节只放几条不可违反的摘要，
 细则不在这里重复。
 
-### 不可违反的四条
+### 不可违反的五条
 
 1. **UI 只走 daemon 自带的 HTTP/JSON 网关**：
    `POST http://127.0.0.1:<port>/daemon.DaemonService/<Method>`（grpc-gateway，
@@ -999,15 +999,21 @@ rebase 时这个文件必然冲突，解决方式是保留本文件（我们的�
 4. **Go 树只读**：`client/**/*.go`、`client/proto/**` 不改。UI 的需求优先在 UI 侧解决；
    确需改 daemon 或 proto 的，先在 `patchdoc/` 写方案，由用户拍板，不在同一次提交里混做。
 
-（第 1、2 条的完整理由与证据行号见 `.ai/skill/netbird-desktop-ui-contract/`。）
+5. **出 Windows 成品只走 `:composeApp:verifyReleaseTest`**（内部先 `syncReleaseTest`：jlink 裁剪
+   `rt\` + jpackage 只产启动器 + 自写 cfg + jar 镜像，然后校验结构/模块集合/skiko 资产）。
+   `createDistributable` 只是开发态 app-image，**不是成品**；也不要手改 `release-test\` 里的构建产物。
+
+（第 1、2 条的完整理由与证据行号见 `.ai/skill/netbird-desktop-ui-contract/`；
+第 5 条的结构与打包态坑见 `.ai/skill/desktop-release-packaging/`。）
 
 ### 规则与技能在哪
 
 | 路径 | 内容 |
 |---|---|
 | [`desktop-ui/AGENTS.md`](desktop-ui/AGENTS.md) | **UI 层规则权威源**（含多实例、托盘、单实例、编码规范、验收） |
-| [`.ai/skill/README.md`](.ai/skill/README.md) | 技能清单唯一处（含 UI 用的 5 个技能、来源与同步方式） |
+| [`.ai/skill/README.md`](.ai/skill/README.md) | 技能清单唯一处（含 UI 用的 6 个技能、来源与同步方式） |
 | [`.ai/skill/netbird-desktop-ui-contract/SKILL.md`](.ai/skill/netbird-desktop-ui-contract/SKILL.md) | 接 daemon 的工作流与坑；`references/daemon-api.md` 是完整 RPC 与字段表 |
+| [`.ai/skill/desktop-release-packaging/SKILL.md`](.ai/skill/desktop-release-packaging/SKILL.md) | **出成品前必读**：启动器结构、jlink 裁剪、图标、打包态坑 |
 | [`.ai/skill/netbird-multi-instance/SKILL.md`](.ai/skill/netbird-multi-instance/SKILL.md) | 多实例部署形态，UI 的实例发现基于它 |
 | [`.github/copilot-instructions.md`](.github/copilot-instructions.md) | VS Code / Copilot 的指针文件（不含规则内容） |
 
@@ -1017,6 +1023,7 @@ rebase 时这个文件必然冲突，解决方式是保留本文件（我们的�
 cd desktop-ui
 ./gradlew :composeApp:compileKotlinDesktop   # 快速编译检查（KMP 下 compileKotlin 是歧义任务）
 ./gradlew :composeApp:run                    # 运行（需要先有带 json-socket 的 daemon）
+./gradlew :composeApp:verifyReleaseTest      # 出成品：jlink 裁剪 + 启动器 + 结构校验
 ```
 
 验收的前提是 daemon 网关可达：

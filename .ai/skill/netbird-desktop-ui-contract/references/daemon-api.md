@@ -145,9 +145,21 @@ UI 渲染用 `userMessage`；`metadata` 里的已知键：`new_version_available
 
 ### `GetConfigResponse`
 
-字段很多且命名不统一（有 `disable_notifications`、`disable_ipv6` 这类下划线字段），
-**不要凭 proto 猜 JSON 键**。UI 首版只需要：`managementURL`、`interfaceName`、`mDMManagedFields`；
-设置页二期再补全。
+**键名规则**：daemon 的网关用 `runtime.NewServeMux` 的默认 marshaler（`UseProtoNames=false`），
+所以 proto 里带下划线的字段到 HTTP 上会转驼峰：`disable_dns` → `disableDns`、
+`disable_ipv6` → `disableIpv6`、`dns_servers` → `dnsServers`。没有下划线的字段**原样保留**：
+`adminURL`、`mDMManagedFields`、`ID`、`IP`、`URL`、`bytesRx`。
+
+```text
+managementUrl, configFile, logFile, preSharedKey, adminURL, interfaceName,
+wireguardPort, mtu, disableAutoConnect, serverSSHAllowed, rosenpassEnabled,
+rosenpassPermissive, disableNotifications, lazyConnectionEnabled, blockInbound,
+networkMonitor, disableDns, disableClientRoutes, disableServerRoutes,
+blockLanAccess, disableIpv6, remoteJobsAllowed, mDMManagedFields[]
+```
+
+`mDMManagedFields` 列出被 MDM 强制的键名（与 `client/mdm` 的 `Key*` 常量同名，如
+`managementURL`、`disableClientRoutes`、`wireguardPort`），UI 必须把这些输入置灰。
 
 ## 状态与网关的对应
 

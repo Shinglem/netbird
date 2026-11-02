@@ -11,6 +11,7 @@
 |---|---|---|
 | [`netbird-desktop-ui-contract/`](netbird-desktop-ui-contract/SKILL.md) | 给 `desktop-ui/` 接 daemon：通道选型、RPC 分级、多实例编排、故障对照 | **本项目自建** |
 | [`netbird-multi-instance/`](netbird-multi-instance/SKILL.md) | 在同一台主机上运行或排查多个 NetBird 实例 | **本项目自建** |
+| [`desktop-release-packaging/`](desktop-release-packaging/SKILL.md) | 出 Windows 成品前 —— 启动器结构、jlink 裁剪运行时、图标、发版校验与打包态坑 | **本项目自建** |
 | [`compose-multiplatform-desktop/`](compose-multiplatform-desktop/SKILL.md) | 写任何 Compose Multiplatform 桌面代码前 —— 布局、渲染、IME、窗口、拖放的坑 | 自外部技能库同步 |
 | [`dev-desktop-gui-e2e-testing/`](dev-desktop-gui-e2e-testing/SKILL.md) | 用脚本驱动真实窗口做端到端验证前 —— 输入法吞按键、抢前台、截图断言 | 自同类项目同步 |
 | [`global-git-ops/`](global-git-ops/SKILL.md) | 拉取 / 推送 / 跟上上游、代理探活、提交自查 | 自同类项目改写（仓库事实按本仓库重写） |
@@ -22,11 +23,15 @@
 - **每个非显然的结论都要点名证据** —— 一个源文件、一行日志、一个实测数字。只断言
   「这样做」的技能，在代码变动之后无从校验。
 
-## 为什么只有这五个
+## 为什么是这几个
 
 `compose-multiplatform-desktop` 的坑表里，终端 / Swing 互操作 / 富文本渲染几节本项目用不到
 （UI 没有终端、不做 Markdown），但**保留原样**：那份技能从技能库同步，改它会让下次同步对不上；
 不匹配的场景 description 不会命中，不占上下文。
+
+`desktop-release-packaging` 是**本项目自建**的（不从技能库同步）：它记的是「jpackage 只产启动器 +
+jlink 运行时外挂 `rt\` + 自写 cfg」这套结构，以及只会在打包态暴露的坑（`icudtl.dat`、exe 的
+ReadOnly 属性、模块集合漂移）。这些结论都由本仓库的实测得出，写进同步来的技能会在下次覆盖时丢掉。
 
 Kotlin 官方的 `kotlin-tooling-*` 系列**没有引入**：适用面是 Kotlin Toolchain（Amper）工程与迁移场景，
 而 `desktop-ui/` 是普通 Gradle 工程 —— 引进来只会误导。Gradle / JDK 的实际配置写在

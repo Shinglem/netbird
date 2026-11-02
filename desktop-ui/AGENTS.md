@@ -40,7 +40,7 @@ CMP 项目 **简单得多** ——
 | WebView / 内嵌 React | 上游 Wails 前端的价值是"能参考"，不是"要保留"；引入 WebView 等于重开一个 Electron |
 | 托盘之外的常驻后台服务 | daemon 已经是 Windows 服务；UI 退出不影响连接，不要再造一个服务 |
 | 自实现 WireGuard / DNS / 路由逻辑 | 全部来自 daemon 的 Status |
-| 权限提升 / UAC 自动化 | 特权操作用户自己用管理员 CLI 做（见 §3.3） |
+| 自己绕过 UAC | 只走 `ShellExecuteExW("runas")`（双击时弹一次 UAC）与计划任务（登录时不弹），见 §5 |
 
 ---
 
@@ -53,7 +53,7 @@ CMP 项目 **简单得多** ——
 | 网络 | Ktor client（CIO）+ `content-negotiation` + `kotlinx-serialization-json` | 只要 HTTP/JSON，**不需要 WebSocket / gRPC** |
 | 序列化 | kotlinx-serialization-json | DTO 手写（proto 生成 Kotlin 的成本不划算，见 §3.6） |
 | 并发 | kotlinx-coroutines（`StateFlow` 做主状态） | |
-| 本地偏好 | multiplatform-settings | 窗口位置、上次选中实例、托盘行为 |
+| 本地偏好 | 结构化 JSON（`ui\` 两层） | 界面配置落 `<home>\ui\ui.json`（默认值，随版本覆盖）与 `ui\ui.custom.json`（用户覆盖，升级不丢）；**不写注册表**，便携版整目录搬走仍有效 |
 | ViewModel | `lifecycle-viewmodel-compose` | 可选；简单页面用普通类 + `StateFlow` 也可以 |
 | 日志 | kotlin-logging + logback（desktopMain） | 落到 `<用户目录>\AppData\Roaming\netbird-ui\logs\` |
 | 打包 | Compose desktop `packageDistributionForCurrentOS`（MSI）| 二期再做 |
@@ -150,6 +150,42 @@ curl -s -X POST http://127.0.0.1:8471/daemon.DaemonService/Status \
 `UpRequest.async` 默认 `false` ⇒ RPC **阻塞到引擎就绪**（CLI 需要这个语义），UI 会表现为"点击后没反应"。
 UI 一律 `{"async": true}`，进度看 `SubscribeStatus`（`client/proto/daemon.proto:276-281`）。
 
+### 3.8 `GetConfig` / `SetConfig` 必须带 profile handle
+
+空 handle 会返回 500 `resolve profile: profile handle is empty` —— **`--disable-profiles` 也不会
+回落到当前 profile**。每个 daemon 只服务一个配置，handle 就是配置文件名去掉 `.json`
+（`config/default.json` → `default`），由 `DaemonClient` 构造时带上（`DaemonPlan.profileHandle`）。
+
+`Logout` 相反：空请求体走「当前 profile」分支，带上 `profileName` 反而会因为缺 `username` 报
+`InvalidArgument`。
+
+### 3.9 注销在 SSH 声明开启时会被拒
+
+`profilemanager` 给缺省的 `ServerSSHAllowed` 补 `true`（`sshServerEnabled` 的 nil-means-on），
+此时 `Logout` 被当作特权操作，而回环网关验证不了调用方身份 ⇒ `PermissionDenied`
+（消息里带 `Reinstalling the service on a socket that carries the caller's identity`）。
+
+- 本 fork 的 `DaemonPlan.configJson` **显式写 `ServerSSHAllowed: false`**（这些实例不提供 SSH 服务）；
+- 既有实例要**重启一次**才生效：`SetConfig` 只写盘，daemon 内存里的 `s.config` 不会更新；
+- UI 在收到这条拒绝时给出「关闭「允许 SSH 服务」，重启并重试注销」按钮。
+
+### 3.10 `Login` / `Logout` 是长操作
+
+它们要连 management 做探测、注册或注销，正常网络也可能超过 5 秒。`DaemonClient` 给这两个 RPC
+单独的 120 秒超时。用默认的 5 秒会把正常登录判成 `Request timeout has expired`，Ktor 一断开，
+daemon 侧的上下文就被取消，状态里随后冒出 `wait for signal stream: context canceled` ——
+那两条错误是超时的后果，不是独立故障。
+
+### 3.11 登录期间的状态文案不能宽匹配
+
+未注册实例的 `managementState.error` 常态就是
+`no peer auth method provided, please use a setup key or interactive SSO login`，
+**里面含 "setup key"**。用它判断"key 无效"会把每次登录都当场取消，daemon 日志只留一行
+`failed creating connection to Management Service: context canceled`（点击后几十毫秒）。
+
+只认确定结论：`couldn't add peer: setup key is invalid`（`isInvalidSetupKeyError`）。
+同理，「no peer auth method provided」不该作为红色错误横幅常驻 —— 登录卡已经说明了它。
+
 ---
 
 ## 4. 硬约束（每条都对应一次实测或明确决策）
@@ -168,6 +204,66 @@ UI 一律 `{"async": true}`，进度看 `SubscribeStatus`（`client/proto/daemon
 7. **`local.properties` 不进 git**（JDK 路径是本机的，可能含用户名）；仓库里只放 `gradle.properties` 的公共配置。
 8. **不做像素复刻**：视觉稿只是参考；用 M3 组件与默认主题，间距/圆角允许不同。判定顺序：
    功能对等 > 原生观感 > 视觉接近。
+
+### 4.1 界面配置（`ui\ui.json` + `ui\ui.custom.json`）
+
+界面自己的配置只覆盖一件事：外观与登录自启。两层的分工是**升级不丢用户设置的前提**：
+
+```text
+<home>\ui\
+  |- ui.json          默认值，随版本发布并被覆盖；用户不要手改（启动时会被重写）
+  |- ui.custom.json   用户覆盖，只存与默认值不同的键；升级替换目录后仍然生效
+  |- state.json       运行态：每个配置的「随界面启动」，由界面每次启停时重写
+```
+
+`ui.json`（程序写入）：
+
+```json
+{
+  "theme": "material",
+  "themeMode": "system",
+  "closeToTray": true
+}
+```
+
+`ui.custom.json`（只有用户改过的键）：
+
+```json
+{
+  "theme": "ocean",
+  "themeMode": "dark",
+  "autostart": true,
+  "closeToTray": false
+}
+```
+
+- 读 = 默认值 ⊕ 覆盖层；写 = 只把与默认值不同的键落进覆盖层。全部改回默认值时覆盖层文件会被删除，
+  这样以后版本改掉的默认值对该用户依然生效。
+- **`<home>` 是启动器所在目录**（打包态），`ui\` 与 `config.json` 都相对它解析，
+  所以整个目录搬走（便携版、换机器）配置仍然有效。开发态进程是 JDK 的 `java.exe`，
+  回落到 `%APPDATA%\netbird-ui`；`NETBIRD_UI_HOME` 可显式覆盖。
+- **`autostart` 是期望值，不是系统状态的镜像**：启动时与计划任务 `NetBirdUI` 对齐。
+  两层里都没有这个键（首次运行）时沿用系统现状再写回 —— 用脚本手工装过自启的旧部署
+  不会被默认值悄悄删掉；开发态（`Unsupported`）则完全不碰。
+- 主题与明暗改完立即落盘；写失败只在设置页顶部提示，界面照常生效。
+- **部署路径不在这里**：`config.json` 的 `root` / `binary` 才是，且可以写相对路径
+  （相对 `<home>`），写死绝对路径的配置一换机器就失效。
+- 不写注册表。旧版本的偏好若还留在 `java.util.prefs` 里，不会再被读取。
+
+### 4.2 daemon 生命周期（界面托管）
+
+界面是 daemon 的唯一管理者，模型与 hermes-compose 一致：
+
+- **启动界面时**：`ProfilesController.startAutostart()` 按 `ui\state.json` 的记录拉起配置，
+  没有记录的新配置按「随界面启动」处理。失败不自动重试 —— 缺 wintun、非管理员这类原因不会自愈。
+- **开关在实例自己的面板里**：选中某个配置后，内容区顶部的实例栏显示它的名称、daemon 状态与
+  「随界面启动」开关。它属于这个配置，不放在全局设置页。
+- **退出界面**（托盘「退出」）：`controller.shutdown()` 逐个 `terminate` 本进程拉起的 daemon。
+  不扫进程表、不按名字杀，所以碰不到官方安装器或别的部署。
+- **关闭窗口 ≠ 退出**：默认只收进托盘（`closeToTray`，可在「桌面」页关掉），daemon 继续跑。
+- **记录随操作走**：界面里点启动/停止/全部启动/全部停止都会改写 `ui\state.json`，
+  所以「我停掉了它」就等于「下次界面启动不要自动起它」。删除配置时它的记录一并清掉。
+- **不要写进 `instance.json`**：那个文件属于部署脚本（含 fqdn / domains），桌面端只读不改写。
 
 ---
 
@@ -214,19 +310,232 @@ daemon 地址、建议网关端口、management URL、iface/端口、当前是�
 以及 `raw\`（含私钥，ACL 已收紧）。`.local/` 已被 `.gitignore` 忽略 ——
 **这些取值不得抄回仓库的任何文档**，仓库文档只写占位符（见 `.local/README.md` 的占位符表）。
 
+**管理员权限（两条路径，与 hermes 一致）**：daemon 要建 wintun 网卡、改路由与 DNS，必须由管理员
+进程拉起。
+
+| 场景 | 做法 | UAC |
+|---|---|---|
+| 双击启动器 | 不是管理员就 `ShellExecuteExW("runas")` 重启自己（`Elevation.relaunchElevated()`） | **弹一次** |
+| 登录自启 | 计划任务 `HighestAvailable` + `InteractiveToken`，Task Scheduler 直接建进程 | 不弹 |
+
+刻意**不给 exe 加 `requireAdministrator` manifest**：那会让每次登录也走加载器提权，计划任务
+「不弹 UAC」的前提就没了。用户点「否」不是故障 —— 界面以普通权限继续，banner 说明 daemon 起不来。
+
+**提权必须发生在占锁之前**：未提权进程如果先拿到单实例锁，`runas` 出来的新进程会看到锁被占用、
+去唤醒那个正要退出的旧进程，形成活锁。`Main` 的顺序固定为「只读探测 → runas → 占锁」。
+
+登录自启安装：
+
+```powershell
+# 需要管理员 PowerShell；开发态把动作指向 gradlew
+pwsh -NoProfile -File desktop-ui\scripts\install-autostart-task.ps1 `
+    -Command "<repo>\desktop-ui\gradlew.bat" -Arguments ":composeApp:run" `
+    -WorkingDirectory "<repo>\desktop-ui"
+
+# 打包产物（release-test 布局）
+pwsh -NoProfile -File desktop-ui\scripts\install-autostart-task.ps1 `
+    -Command "<repo>\release-test\netbird-multi-ui.exe"
+
+pwsh -NoProfile -File desktop-ui\scripts\install-autostart-task.ps1 -Status
+pwsh -NoProfile -File desktop-ui\scripts\install-autostart-task.ps1 -Remove
+```
+
+打包产物可以在界面的「桌面」页直接开关这条任务（`WindowsAutostart`，任务名同为 `NetBirdUI`）。
+开发态没有 jpackage 启动器、也拿不到稳定的启动命令，界面里只显示「请用脚本安装」。
+
+任务声明 `RunLevel=HighestAvailable` + `LogonType=InteractiveToken`，`ExecutionTimeLimit=PT0S`
+（否则 72 小时到点会连带杀掉界面管辖的 daemon）。**任务只拉起界面**：每个配置的 daemon 仍是
+界面的子进程（`ProfileSupervisor`），所以关窗口只收进托盘、daemon 继续跑。
+
+---
+
+### release 结构：启动器 + 外挂运行时（对齐 hermes-compose）
+
+`release-test/` **不是**一个 jpackage app-image，而是拆成三层：
+
+```text
+netbird-multi-ui.exe            原生启动器（jpackage 只产它，约 0.5 MB）
+app\netbird-multi-ui.cfg        手写的启动配置：app.runtime=$ROOTDIR\rt
+bin\App.jar                     本模块的类与资源
+lib\*.jar                       全部依赖 + skiko 的 dll 与 icudtl.dat
+rt\                             jlink 裁剪运行时
+```
+
+任务链（`composeApp/build.gradle.kts`）：
+
+| 任务 | 作用 |
+|---|---|
+| `linkRuntime` | 用 `netbird.jdk.dir` 的 `jmods/` 跑 jlink：`--strip-debug --no-header-files --no-man-pages --compress=zip-9` |
+| `jpackageLauncher` | jpackage 只生成启动器：`--runtime-image` 指向**空目录** |
+| `launcherBundle` | 拷贝 exe + **自己写** cfg（runtime 外挂 `rt\`、classpath 指向 `bin\`/`lib\*`） |
+| `syncReleaseTest` | `Sync` 到 `<repo>\release-test`，并 preserve `profiles/`、`ui/`、`Netbird/`、后端二进制 |
+
+**为什么不用 jpackage 的 `--runtime-image` 直接打进 app-image**：那样每出一次包都要复制 60 MB，
+而且 runtime 与启动器绑死；空 runtime + 自写 cfg 让 `rt\` 可以单独替换（换 JDK 只换一个目录）。
+`createDistributable`（Compose 自带）只用于开发时快速看 app-image，**不参与 release**。
+
+**实测体积**（Temurin JBR SDK 25.0.4.1）：jpackage 默认 runtime **85.6 MB** → jlink 裁剪后
+**58.6 MB**（-31.5%，205 个文件）。
+
+模块清单与理由（少一个就是运行期 `NoClassDefFoundError`，而且往往只在打包态暴露）：
+
+| 模块 | 谁用 |
+|---|---|
+| `java.base` | 基础；jpackage 启动器也依赖 |
+| `java.desktop` | AWT/Swing：窗口、托盘、字体渲染 |
+| `java.datatransfer` | 剪贴板（BasicTextField 的复制粘贴） |
+| `java.logging` | `java.util.logging`：若干库类初始化时引用 |
+| `java.prefs` | `java.desktop` 的传递依赖（jlink 一定会带上）；本项目不直接用，列出来是为了与 `rt\release` 的 MODULES 保持一致 |
+| `java.xml` | logback 配置解析（JAXP） |
+| `jdk.crypto.ec` | TLS ECDHE 握手 |
+| `jdk.charsets` | GBK：解码 `schtasks` 输出（Windows 控制台代码页） |
+| `jdk.unsupported` | `sun.misc.Unsafe`（skiko / 协程兜底） |
+
+**刻意不含**、并且已经实测过没有问题的：
+
+- `jdk.localedata` —— 界面文案是硬编码中文，日志时间格式只用数字。将来若用**依赖 locale
+  名称**的格式化（月份名、星期名），要加回来（约 +8 MB）。
+- `java.naming` —— logback 的 JNDI 分支不触发：`LoggerContext` 初始化与日志输出实测正常。
+
+**加/换依赖后的复验流程**（静态分析看不出反射与服务加载）：
+
+```powershell
+# 1. 静态闭包（在 release-test\lib 上跑；注意 Windows 通配符）
+jdeps --print-module-deps --ignore-missing-deps --multi-release 21 lib\*.jar
+
+# 2. 差值补进 runtimeModules，然后重建成品
+./gradlew :composeApp:syncReleaseTest
+
+# 3. 用裁剪后的 java.exe 做一次冒烟（不要只跑 Gradle 的 JDK）
+.\rt\bin\java.exe -cp "bin\App.jar;lib\*" <Probe>
+```
+
+**三个只在打包态才会踩到的坑**（都已修，别改回去）：
+
+- `icudtl.dat` 必须和 skiko 的 dll 一起解压到 `lib\`（`syncReleaseTest` 里 `include("*.dat")`）。
+  少了它 skiko 的 `ParagraphBuilder` 会直接 abort，日志只有一句
+  `SkLoadICU: datafile ... is missing`。
+- `-Dskiko.library.path=$ROOTDIR\lib` 必须写进 cfg，且 dll/sha256/dat 就在那个目录。
+- jpackage 产出的 exe 带 **ReadOnly** 属性：覆盖前要 `setWritable(true)`，否则 `Sync` 报
+  `Access denied`（`forceDeleteTree()` 与 `doFirst` 里都做了）。
+
+`jmods` 缺失时（用 `jbr-*` 纯运行时或普通 JRE 打包）`linkRuntime` 会跳过，`syncReleaseTest`
+直接失败并提示换 `jbrsdk-*` —— 不会产出没有 `rt\` 的坏包。
+
+---
+
+### 发版流程（强制，不许绕）
+
+出 Windows 成品只走这一条链：
+
+```powershell
+./gradlew :composeApp:build                        # 1. 编译 + 测试
+./gradlew :composeApp:verifyReleaseTest            # 2. 同步 + 校验（内部先 syncReleaseTest）
+pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1 -SkipBackend   # 3. 补后端与配置
+# 4. 冒烟：见技能 desktop-release-packaging §验证工作流
+```
+
+**禁止**：
+
+- 用 `createDistributable` 出成品（它是开发态 app-image，runtime 未裁剪、布局不同）。
+- 手工往 `release-test\` 里拷 `app\`/`bin\`/`lib\`/`rt\`，或手改 `app\*.cfg`。
+- 手改 `scripts/make-icons.ps1` 产出的 PNG/ICO。
+- 跳过 `verifyReleaseTest` 直接发成品。
+
+**改了这些就必须重新出成品**（对应任务会自动重跑，但别绕过）：
+
+| 改动 | 后果 |
+|---|---|
+| 加/换依赖 | 先按技能里的 `jdeps` 流程复核 `runtimeModules`，再 `verifyReleaseTest` |
+| 换 JDK / 改 `netbird.jdk.dir` | `rt\` 由 jlink 产出，必须重跑；`jmods/` 缺失会直接失败 |
+| 改图标 SVG | 先 `scripts/make-icons.ps1`，再 `verifyReleaseTest`（否则 exe 还是旧图标） |
+| 改主类 / 包名 / JVM 参数 | 都在 `build.gradle.kts` 的常量与 cfg 里；重跑，不要手改 cfg |
+
+`verifyReleaseTest` 会拦住：缺 `rt\`、cfg 被改坏、`rt\` 模块集合与 `runtimeModules` 不一致、
+skiko 的 dll/`icudtl.dat` 缺失、`lib\` 依赖镜像不完整。它失败时**修根因**，不要改校验。
+
+只想确认"现有目录有没有被手改过"时用 `:composeApp:checkReleaseTest`（不同步，只校验）；
+它比 `verifyReleaseTest` 少一次重建，适合发出去之前最后一眼。
+
+操作细节与打包态坑见技能 [`desktop-release-packaging`](../../.ai/skill/desktop-release-packaging/SKILL.md)。
+
+---
+
+### release-test/ —— 发版前的真实测试目录
+
+`<repo>\release-test\` 是**真机验证的唯一目录**（整目录已被根 `.gitignore` 忽略）：
+
+```text
+release-test/
+  |- profiles/                 后端配置：每个实例一个子目录（config\ + runfiles\）
+  |- netbird-multi.exe         后端（自编译的多实例版本）
+  |- wintun.dll                后端依赖，必须与 exe 同目录
+  |- netbird-multi-ui.exe      UI 启动器（jpackage 只产它）
+  |- ui\                       界面配置：ui.json（默认值）+ ui.custom.json（用户覆盖）
+  |- app\netbird-multi-ui.cfg  启动配置：app.runtime=$ROOTDIR\rt
+  |- bin\App.jar               本模块的类与资源
+  |- lib\*.jar                 全部依赖 + skiko 的 dll/icudtl.dat
+  |- rt\                       jlink 裁剪运行时（别手改，由 Gradle 产出）
+  |- ui/                       UI 侧资源（图标 / 主题等，当前为空）
+```
+
+装配（可重复执行；`app/`、`bin/`、`lib/`、`rt/` 由 Gradle 每次镜像，
+`profiles/`、`ui/`、`Netbird/`、后端二进制会被 preserve）：
+
+```powershell
+# 脚本内部会先跑 :composeApp:verifyReleaseTest（= syncReleaseTest + 校验）
+pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1
+# 只刷新后端与配置、不动 Gradle：-NoBuild
+# 后端 exe 正被运行中的 daemon 占用：-SkipBackend
+# 后端不在 .local\env.ps1 的实例清单里：-BackendDir <dir>
+# 要带一份既有实例：-ProfilesFrom <profiles 目录>
+```
+
+四条不可违反：
+
+1. **自包含**：`netbird-multi-ui.exe` 同目录有 `profiles\` 时，UI 的实例根就取这里
+   （`AppPathsResolver` 的第 3 来源），不需要 `NETBIRD_UI_ROOT`，也不会去抢别的部署根。
+2. **`rt\` 不是可选**：cfg 里 `app.runtime=$ROOTDIR\rt`，而启动器只认 `app\<名字>.cfg`；
+   删了 `rt\` 或改了目录名，exe 直接打不开。
+3. **`app\`、`bin\`、`lib\`、`rt\` 都是构建产物**，不要手改；改名就改 `build.gradle.kts` 的
+   `appImageName`（它同时是 exe 名与 cfg 名）再重跑装配脚本。
+4. **跑之前先关掉这里的 UI**：脚本会拒绝写入正被占用的目录（否则 exe/`app/` 复制到一半）。
+
 ---
 
 ## 6. 编码规范
 
 - Kotlin 官方风格；4 空格缩进；文件名 = 顶层声明名。
 - 包名 `dev.shinglem.netbird.ui`，分层：
-  `api/`（`DaemonClient`、`@Serializable` DTO、错误映射）· `data/`（`Repository`，管实例与连接状态）
-  · `feature/`（`status` / `peers` / `networks` / `settings`）· `screen/`（页面与 `Theme.kt`）·
-  `desktopMain/`（入口、托盘、单实例锁、日志）。
-- 状态用 `sealed interface` 表达（`UiState.Loading / Ready / Unavailable(msg)`），不用 boolean 堆砌。
-- 所有字符串中文，集中放在 `ui/Strings.kt`（`object Strings`），**不要散落在深层组件里**。
-- 时间：daemon 给的是 protobuf `Timestamp` → 网关输出 RFC3339 字符串，**统一在 DTO 层转 `Instant`**，
-  组件里不要自己 parse 字符串。
+  `api/`（`DaemonClient`、`@Serializable` DTO、请求体构造）· `data/`（`ProfilesController` 实例清单、
+  `ConfigDraft` 设置草稿、`UiState`、`UiPreferences` 与 `DesktopConfig` 界面配置、
+  `UiRuntimeState` 运行态）·
+  `daemon/`（`ProfileSupervisor` 进程与通道、`DaemonPlan` 启动规格）·
+  `profile/`（实例身份与磁盘布局）· `screen/`（`App` 骨架 + 各功能页 + `Common.kt` 共享组件）·
+  `app/`（入口、托盘、单实例锁、路径解析、`ui.json` 读写）。
+- 主界面 = 顶部实例下拉 + 左侧 `NavigationRail` 五页（连接 / Peers / 网络 / 设置 / 日志）；
+  这些都是**当前实例**的内容。全局的「桌面」入口在顶部工具栏「新建配置」右边，
+  点它切到全局设置页，点左侧任一 tab 回到实例页。tab 全局共用，切实例不换页。
+- 实例内容区顶部有一条实例栏（`ProfileBar`）：名称 + daemon 状态 + 「随界面启动」开关。
+  启动策略属于配置本身，**不要**把它挪回全局设置页。
+- 实例选择用 M3 `ExposedDropdownMenuBox`，不要退回「按钮 + 弹出菜单」：按钮看不出能切换实例。
+- M3 配色在 `ui/theme/Theme.kt`：`ThemeStyle`（默认 / 海洋 / 森林 / 落日 / 蔷薇 / 石板 / 高对比）
+  × `ThemeMode`（跟随系统 / 浅色 / 深色）。每套配色的明暗是**两份独立色板** —— 深色主题的
+  primary 必须是浅色调；`ThemeTest` 会断言主要前景/背景的对比度。
+- 状态用 `sealed interface` 表达（`UiState.Ready / Unavailable(msg)`；daemon 进程生命周期另有
+  `DaemonState`），不用 boolean 堆砌。
+- 所有字符串中文，集中放在 `ui/screen/Strings.kt`（`object Strings`），**不要散落在深层组件里**。
+- 托盘用 `app/DesktopTray.kt`（AWT `TrayIcon` + Swing `JPopupMenu`），**不要用**
+  `androidx.compose.ui.window.Tray`：后者的菜单是原生 Win32 菜单，中文按 ANSI 转码后全是方框，
+  `MenuItem.setFont` 也改不动（CMP-1936）。Swing 菜单走 Java2D 与 LAF 字体，中文正常。
+- **图标**：源文件 `desktop-ui/icons/netbird-blue.svg`（官方 NetBird mark 的蓝色版），
+  由 `scripts/make-icons.ps1` 调 `scripts/MakeIcons.java`（JDK 自带 Java2D，无第三方依赖）
+  生成 `composeApp/src/desktopMain/resources/icons/netbird-*.png` 与 `composeApp/icons/netbird-blue.ico`。
+  改颜色/尺寸就改 SVG 后重跑脚本；**不要手改 PNG/ICO**。窗口图标与托盘图标都从这份资源加载
+  （`app/AppIcon.kt`），资源缺失会直接报错而不是退回占位图。
+- 时间：daemon 给的是 protobuf `Timestamp`（网关输出 RFC3339 字符串），DTO 保留原字符串，
+  统一由 `screen/Common.kt` 的 `formatTimestamp` 格式化 —— 组件里不要各自 parse。刻意不转
+  `kotlinx.datetime.Instant`：本项目解析到的 compat 变体已把该 API 标为弃用。
 - 新增文件一律 LF。
 
 ---
@@ -241,7 +550,16 @@ daemon 地址、建议网关端口、management URL、iface/端口、当前是�
 | 状态渲染 | daemon 停止 → UI 显示 `DaemonUnavailable`；启动 → 自动恢复到真实状态 |
 | 连接控制 | UI 的 `Up` / `Down` 后 `Status.status` 变化与 UI 一致（用 curl 交叉验证，不信 UI 自报） |
 | 多实例 | 至少两个实例各配一个端口，UI 能切换且不串状态 |
-| 托盘 | 关闭窗口后进程仍在、托盘可恢复；退出菜单项真的退出 |
+| 关闭窗口 | 点 × 后窗口消失、进程仍在、托盘可恢复，daemon 仍在跑；把「关闭窗口时收进托盘」关掉后再点 ×，进程退出且 daemon 全部停止 |
+| 自动启动 | 选中某个配置，在实例栏关掉「随界面启动」→ 退出界面 → 重新启动：它不自动起，另一个照常起；`ui\state.json` 里有对应记录 |
+| 桌面设置 | 顶部「新建配置」右边是「桌面」入口（不在左侧 rail）；切换配色/明暗后重启界面，选择仍在；`ui\ui.custom.json` 里只出现改过的键 |
+| 配置升级不丢 | 改过主题后替换 `ui\ui.json`（模拟新版默认值），重启界面：用户改过的键保留，没改过的键跟随新默认值；全部改回默认时 `ui.custom.json` 自动消失 |
+| 配置便携 | 把整个发布目录复制到另一路径启动，主题与自启设置仍在（`ui\` 跟着走）；`config.json` 里的 `root` / `binary` 写相对路径也能解析 |
+| 自启动 | 打包态在「桌面」页开关后 `schtasks /Query /TN NetBirdUI /XML` 能读出任务；开发态显示提示且开关禁用 |
+| 托盘 | 关闭窗口后进程仍在、托盘可恢复；右键菜单**中文正常**且不被任务栏裁切；退出菜单项真的退出 |
+| 图标 | 窗口标题栏与托盘都显示蓝色 NetBird mark；`createDistributable` 产出的 exe 图标一致（`ExtractAssociatedIcon` 可读） |
+| 裁剪 runtime | `rt\release` 的 `MODULES` 等于 `runtimeModules`，体积 ≈ 58 MB；用 `rt\bin\java.exe -cp "bin\App.jar;lib\*"` 跑探测：GBK/Unsafe/AWT/xml/TLS 全部可用；应用窗口、托盘、主题切换正常 |
+| release 结构 | `app\netbird-multi-ui.cfg` 的 `app.runtime` 指向 `$ROOTDIR\rt`；`lib\` 里有 `skiko-windows-x64.dll`、`.sha256`、`icudtl.dat`；双击 exe 能起（会弹一次 UAC） |
 
 GUI 级别的自动化（真实窗口驱动、截图断言）见技能 `dev-desktop-gui-e2e-testing`。
 
@@ -255,6 +573,7 @@ GUI 级别的自动化（真实窗口驱动、截图断言）见技能 `dev-desk
 | `.ai/skill/netbird-desktop-ui-contract/` | **先读这个**：daemon 契约、实例编排、验收命令（含 `references/daemon-api.md` 的完整 RPC 与字段表） |
 | `.ai/skill/netbird-multi-instance/` | 多实例部署形态（wintun GUID / NRPT 前缀 / 环境变量），UI 的实例发现基于它 |
 | `.ai/skill/compose-multiplatform-desktop/` | 写 CMP 桌面代码前的坑（IME、滚动、窗口 resize、拖放） |
+| `.ai/skill/desktop-release-packaging/` | **出成品前必读**：启动器结构、jlink 裁剪、图标、打包态坑与验证流程 |
 | `.ai/skill/dev-desktop-gui-e2e-testing/` | 脚本驱动真实窗口做端到端验证 |
 | `.ai/skill/global-git-ops/` | 本机 git 纪律：代理、提交前自查、上游同步 |
 | `patchdoc/` | 本 fork 的**变更记录与证据**（规则在根 `AGENTS.md` 的「本 fork 的改动」节）；UI 改动若触及 Go 侧，必须在这里追加一份 |
@@ -281,6 +600,7 @@ GUI 级别的自动化（真实窗口驱动、截图断言）见技能 `dev-desk
 | 接/改 daemon 通道、加一个 RPC 调用 | 技能 `netbird-desktop-ui-contract` + `references/daemon-api.md` |
 | 起一个可调试的 daemon 实例（带 json-socket） | 技能 `netbird-desktop-ui-contract` §启动参数矩阵 |
 | 写 Compose 界面、选组件、踩到渲染/IME/滚动的坑 | 技能 `compose-multiplatform-desktop` |
+| 出 Windows 成品、改裁剪模块、换图标、打包态报错 | **技能 `desktop-release-packaging`** + 本文件 §5「发版流程」 |
 | 脚本驱动窗口验收 | 技能 `dev-desktop-gui-e2e-testing` |
 | 加依赖、升版本、Gradle 报错 | `desktop-ui/gradle/libs.versions.toml` + 本文件 §2 的依赖门槛（Kotlin 工具链类技能**未引入**，见 `.ai/skill/README.md`） |
 | 提交 / 推送 / 跟上上游 | 技能 `global-git-ops` + 根 `AGENTS.md` 的 fork 小节 |

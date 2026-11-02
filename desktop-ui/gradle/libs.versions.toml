@@ -21,7 +21,6 @@ serialization = "1.12.0"
 # material3 1.9.0 传递依赖 kotlinx-datetime 0.7.1，与本项一起解析到官方 compat 变体
 # 0.8.0-0.6.x-compat（保留 0.6 的 Instant 等 API）。这里直接写解析结果。
 datetime = "0.8.0-0.6.x-compat"
-settings = "1.3.0"
 
 # 网络
 ktor = "3.6.0"
@@ -39,10 +38,9 @@ lifecycle-runtime-compose   = { module = "org.jetbrains.androidx.lifecycle:lifec
 kotlinx-coroutines-core  = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
 
-# --- 序列化 / 时间 / 偏好 ---
+# --- 序列化 / 时间 ---
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kotlinx-datetime           = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
-multiplatform-settings     = { module = "com.russhwolf:multiplatform-settings", version.ref = "settings" }
 
 # --- Ktor（HTTP/JSON；只要这四件：daemon 走 grpc-gateway，不需要 WebSocket / gRPC）---
 ktor-client-core                = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }

@@ -339,6 +339,9 @@ func (m *Manager) persistNewService(ctx context.Context, accountID string, svc *
 	}
 
 	return m.store.ExecuteInTransaction(ctx, func(transaction store.Store) error {
+		if err := validateTargetAccessControl(svc); err != nil {
+			return err
+		}
 		if err := m.validateServiceDomain(ctx, transaction, accountID, svc, svc.ProxyCluster); err != nil {
 			return err
 		}
@@ -358,6 +361,10 @@ func (m *Manager) persistNewService(ctx context.Context, accountID string, svc *
 
 		if err := transaction.CreateService(ctx, svc); err != nil {
 			return fmt.Errorf("create service: %w", err)
+		}
+
+		if err := transaction.IncrementNetworkSerial(ctx, accountID); err != nil {
+			return fmt.Errorf("increment network serial: %w", err)
 		}
 
 		return nil
@@ -529,6 +536,10 @@ func (m *Manager) persistNewEphemeralService(ctx context.Context, accountID, pee
 
 		if err := transaction.CreateService(ctx, svc); err != nil {
 			return fmt.Errorf("create service: %w", err)
+		}
+
+		if err := transaction.IncrementNetworkSerial(ctx, accountID); err != nil {
+			return fmt.Errorf("increment network serial: %w", err)
 		}
 
 		return nil
@@ -708,6 +719,12 @@ func (m *Manager) executeServiceUpdate(ctx context.Context, transaction store.St
 	}
 
 	m.preserveExistingAuthSecrets(service, existingService)
+	if err := preserveTargetAccessActions(service, existingService); err != nil {
+		return err
+	}
+	if err := validateTargetAccessControl(service); err != nil {
+		return err
+	}
 	if err := validateHeaderAuthValues(service.Auth.HeaderAuths); err != nil {
 		return err
 	}
@@ -735,6 +752,10 @@ func (m *Manager) executeServiceUpdate(ctx context.Context, transaction store.St
 		return fmt.Errorf("update service: %w", err)
 	}
 
+	if err := transaction.IncrementNetworkSerial(ctx, accountID); err != nil {
+		return fmt.Errorf("increment network serial: %w", err)
+	}
+
 	return nil
 }
 
@@ -743,6 +764,68 @@ func (m *Manager) validateServiceDomain(ctx context.Context, tx store.Store, acc
 		return nil
 	}
 	return m.clusterDeriver.ValidateServiceDomain(ctx, tx, accountID, svc.Domain, cluster)
+}
+
+func validateTargetAccessControl(svc *service.Service) error {
+	if !svc.HasTargetAccessControl() {
+		return nil
+	}
+	// Legacy requests may acquire an existing action during the update merge.
+	if err := svc.Validate(); err != nil {
+		return status.Errorf(status.InvalidArgument, "%s", err)
+	}
+	return nil
+}
+
+func preserveTargetAccessActions(updated, existing *service.Service) error {
+	if !existing.HasTargetAccessControl() {
+		return nil
+	}
+	if slices.ContainsFunc(updated.Targets, func(target *service.Target) bool {
+		return target == nil
+	}) {
+		return status.Errorf(status.InvalidArgument, "target must not be nil")
+	}
+	if len(updated.Targets) > 0 && !slices.ContainsFunc(updated.Targets, func(target *service.Target) bool {
+		return !target.AccessActionProvided
+	}) {
+		return nil
+	}
+	byPath := make(map[string]*service.Target, len(existing.Targets))
+	for _, target := range existing.Targets {
+		location := effectiveTargetPath(target)
+		if _, duplicate := byPath[location]; duplicate {
+			return status.Errorf(status.InvalidArgument,
+				"cannot preserve target access control for duplicate location %q", location)
+		}
+		byPath[location] = target
+	}
+	actionsProvided := false
+	for _, target := range updated.Targets {
+		actionsProvided = actionsProvided || target.AccessActionProvided
+		location := effectiveTargetPath(target)
+		if previous := byPath[location]; previous != nil && !target.AccessActionProvided {
+			target.AccessAction = previous.AccessAction
+		}
+		delete(byPath, location)
+	}
+	if actionsProvided {
+		return nil
+	}
+	for location, target := range byPath {
+		if target.AccessAction != "" && target.AccessAction != service.TargetAccessActionInherit {
+			return status.Errorf(status.InvalidArgument,
+				"include access_action when removing or changing controlled target location %q", location)
+		}
+	}
+	return nil
+}
+
+func effectiveTargetPath(target *service.Target) string {
+	if target.Path == nil || *target.Path == "" {
+		return "/"
+	}
+	return *target.Path
 }
 
 // validateL4PortDiffOnClusterDiff checks if custom L4 ports are configured and validates port changes across clusters.
@@ -956,6 +1039,10 @@ func (m *Manager) DeleteService(ctx context.Context, accountID, userID, serviceI
 			return fmt.Errorf("failed to delete service: %w", err)
 		}
 
+		if err = transaction.IncrementNetworkSerial(ctx, accountID); err != nil {
+			return fmt.Errorf("increment network serial: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -995,6 +1082,12 @@ func (m *Manager) DeleteAllServices(ctx context.Context, accountID, userID strin
 
 			if err = transaction.DeleteService(ctx, accountID, svc.ID); err != nil {
 				return fmt.Errorf("failed to delete service: %w", err)
+			}
+		}
+
+		if len(services) > 0 {
+			if err = transaction.IncrementNetworkSerial(ctx, accountID); err != nil {
+				return fmt.Errorf("increment network serial: %w", err)
 			}
 		}
 
@@ -1354,6 +1447,10 @@ func (m *Manager) deletePeerService(ctx context.Context, accountID, peerID, serv
 			return fmt.Errorf("delete service: %w", err)
 		}
 
+		if err = transaction.IncrementNetworkSerial(ctx, accountID); err != nil {
+			return fmt.Errorf("increment network serial: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -1406,6 +1503,11 @@ func (m *Manager) deleteExpiredPeerService(ctx context.Context, accountID, peerI
 		if err = transaction.DeleteService(ctx, accountID, serviceID); err != nil {
 			return fmt.Errorf("delete service: %w", err)
 		}
+
+		if err = transaction.IncrementNetworkSerial(ctx, accountID); err != nil {
+			return fmt.Errorf("increment network serial: %w", err)
+		}
+
 		deleted = true
 
 		return nil

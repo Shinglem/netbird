@@ -2,6 +2,8 @@ package certposture
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -86,6 +88,7 @@ func TestSignVerify_RoundTripPerKeyType(t *testing.T) {
 	ca := certtest.NewCA(t, "root")
 	keys := map[string]crypto.Signer{
 		SigAlgECDSASHA256:  certtest.ECDSAKey(t),
+		SigAlgECDSASHA384:  p384Key(t),
 		SigAlgRSAPSSSHA256: certtest.RSAKey(t),
 		SigAlgEd25519:      certtest.Ed25519Key(t),
 	}
@@ -101,6 +104,24 @@ func TestSignVerify_RoundTripPerKeyType(t *testing.T) {
 			assert.NoError(t, VerifyChain(chain, mustPool(t, ca.PEM), now))
 		})
 	}
+}
+
+func p384Key(t *testing.T) crypto.Signer {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	return key
+}
+
+// TestSign_RefusesCurvesTheProofDoesNotName: a proof names its algorithm from the key, and
+// the verifier only knows P-256 and P-384, so P-521 is refused before anything is signed.
+func TestSign_RefusesCurvesTheProofDoesNotName(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	require.NoError(t, err)
+
+	_, _, err = Sign(key, NewChallenger(secret).Nonce(peerKey, now), peerKey)
+
+	assert.ErrorIs(t, err, ErrUnsupportedKey)
 }
 
 func TestVerify_Rejections(t *testing.T) {
@@ -152,6 +173,24 @@ func TestChainMatchesCAs(t *testing.T) {
 	assert.False(t, ChainMatchesCAs(chainPEM, []string{ca.PEM}, now.Add(30*24*time.Hour)))
 	assert.False(t, ChainMatchesCAs(chainPEM, []string{"not a pem"}, now))
 	assert.False(t, ChainMatchesCAs("not a pem", []string{ca.PEM}, now))
+}
+
+func TestAnyChainMatchesCAs(t *testing.T) {
+	ca := certtest.NewCA(t, "root")
+	otherCA := certtest.NewCA(t, "other-root")
+	chainPEM := EncodeChainPEM([]*x509.Certificate{ca.Issue(t, certtest.ECDSAKey(t), "device")})
+	otherPEM := EncodeChainPEM([]*x509.Certificate{otherCA.Issue(t, certtest.ECDSAKey(t), "device")})
+
+	assert.True(t, AnyChainMatchesCAs([]string{otherPEM, chainPEM}, []string{ca.PEM}, now))
+	assert.False(t, AnyChainMatchesCAs([]string{otherPEM}, []string{ca.PEM}, now))
+	assert.False(t, AnyChainMatchesCAs(nil, []string{ca.PEM}, now))
+	assert.False(t, AnyChainMatchesCAs([]string{chainPEM}, []string{"not a pem"}, now))
+
+	roots, err := ParseCAs([]string{ca.PEM})
+	require.NoError(t, err)
+	assert.True(t, AnyChainMatchesPool([]string{otherPEM, chainPEM}, roots, now))
+	assert.False(t, AnyChainMatchesPool([]string{otherPEM}, roots, now))
+	assert.False(t, AnyChainMatchesPool(nil, roots, now))
 }
 
 func TestChainPEM_RoundTrip(t *testing.T) {

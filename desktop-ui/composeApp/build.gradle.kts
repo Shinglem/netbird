@@ -156,7 +156,7 @@ val linkRuntime by tasks.registering(Exec::class) {
 //  60 MB，且 runtime 与启动器绑死；空 runtime + 自写 cfg 让两者解耦，rt\ 可以单独替换。
 //  jpackage 在这里只当"启动器生成器"，它生成的 cfg 直接丢弃。
 // ============================================================================
-val appVersion = "1.0.0"
+val appVersion = "0.1.0"
 val appMainClass = "dev.shinglem.netbird.ui.MainKt"
 val repoRootDir: File = rootProject.projectDir.parentFile
 

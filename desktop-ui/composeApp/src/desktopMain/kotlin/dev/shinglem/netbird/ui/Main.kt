@@ -19,6 +19,7 @@ import dev.shinglem.netbird.ui.app.Elevation
 import dev.shinglem.netbird.ui.app.JsonDesktopConfigStore
 import dev.shinglem.netbird.ui.app.JsonUiRuntimeStore
 import dev.shinglem.netbird.ui.app.SingleInstanceLock
+import dev.shinglem.netbird.ui.app.SingleInstanceSignal
 import dev.shinglem.netbird.ui.app.TrayMenuItem
 import dev.shinglem.netbird.ui.app.WindowsAutostart
 import dev.shinglem.netbird.ui.app.appIconImage
@@ -33,10 +34,12 @@ import dev.shinglem.netbird.ui.profile.DesktopProfileStorage
 import dev.shinglem.netbird.ui.screen.App
 import dev.shinglem.netbird.ui.screen.Strings
 import java.io.File
+import javax.swing.JOptionPane
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -47,6 +50,24 @@ import kotlinx.coroutines.launch
  *
  * 带 `--silent`（登录自启的计划任务就是这么起的）时窗口不进入组合，只在托盘常驻。
  */
+/**
+ * 已有实例在跑：非静默触发应当把它的窗口叫出来，而不是默默退出。
+ *
+ * 叫不到时必须给反馈（对方是旧版本、跨权限被拒）—— javaw 没有控制台，静默退出
+ * 对用户来说就是「点了没反应」。
+ */
+private fun requestExistingInstance(home: File) {
+    if (SingleInstanceSignal.notify(home)) return
+    runCatching {
+        JOptionPane.showMessageDialog(
+            null,
+            "已有 NetBird UI 在运行（可能在系统托盘里）。\n如果看不到窗口，请从托盘图标打开。",
+            "NetBird UI",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
+    }
+}
+
 fun main(args: Array<String>) {
     val silent = isSilentStart(args.asList())
     val paths = AppPathsResolver.resolve()
@@ -56,7 +77,7 @@ fun main(args: Array<String>) {
     // 提权后的新进程会把自己判成"第二个实例"而去唤醒那个正要退出的旧进程，形成活锁。
     if (SingleInstanceLock.isRunning(lockFile)) {
         // 静默触发（登录自启）撞上已经在跑的那一份时直接退出：用户正在用，别把窗口抢到前台。
-        if (!silent) System.err.println("NetBird UI 已在运行（锁文件 $lockFile）")
+        if (!silent) requestExistingInstance(paths.home)
         return
     }
 
@@ -81,9 +102,13 @@ fun main(args: Array<String>) {
 
     val lock = SingleInstanceLock.acquire(lockFile)
     if (lock == null) {
-        System.err.println("NetBird UI 已在运行（锁文件 $lockFile）")
+        requestExistingInstance(paths.home)
         return
     }
+
+    // 第二个实例发来的「显示窗口」请求。唤醒线程在后台跑，切前台交给 Compose 侧。
+    val activateSignal = MutableStateFlow(0)
+    val activationWatcher = SingleInstanceSignal.watch(paths.home) { activateSignal.value += 1 }
 
     val storage = DesktopProfileStorage()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -127,6 +152,9 @@ fun main(args: Array<String>) {
 
     Runtime.getRuntime().addShutdownHook(Thread { controller.shutdown() })
 
+    // 退出路径兜底：正常退出走 quit()，这里覆盖被强杀之外的其他终止方式。
+    Runtime.getRuntime().addShutdownHook(Thread { activationWatcher.close() })
+
     application {
         var windowVisible by remember { mutableStateOf(!silent) }
         val closeToTray by preferences.closeToTray.collectAsState()
@@ -135,6 +163,7 @@ fun main(args: Array<String>) {
         fun quit() {
             controller.shutdown()
             scope.cancel()
+            activationWatcher.close()
             lock.close()
             trayForQuit?.dispose()
             exitApplication()
@@ -168,6 +197,12 @@ fun main(args: Array<String>) {
         }
         DisposableEffect(Unit) { onDispose { tray.dispose() } }
 
+        // 第二个实例请求显示窗口：从托盘里拉出来。
+        val activation by activateSignal.collectAsState()
+        LaunchedEffect(activation) {
+            if (activation > 0) windowVisible = true
+        }
+
         if (windowVisible) {
             Window(
                 onCloseRequest = {
@@ -178,6 +213,13 @@ fun main(args: Array<String>) {
                 icon = windowIcon,
                 state = rememberWindowState(width = 960.dp, height = 760.dp),
             ) {
+                // 从托盘或第二个实例唤醒时尽量把窗口提到前面。
+                LaunchedEffect(activation) {
+                    if (activation > 0) {
+                        window.toFront()
+                        window.requestFocus()
+                    }
+                }
                 App(controller, environment, preferences, WindowsAutostart)
             }
         }

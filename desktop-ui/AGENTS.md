@@ -194,7 +194,10 @@ daemon 侧的上下文就被取消，状态里随后冒出 `wait for signal stre
    `netbird-multi-instance`）：`<root>\profiles\<name>\instance.json` 描述每个实例。UI 的实例列表
    来自这里，`baseUrl` 也来自这里（或由 UI 配置文件覆盖）。**不得假设"只有一个 daemon"。**
 2. **不要在代码里扫端口**。端口属于部署配置；扫端口会在别人的机器上连错实例，也掩盖配置错误。
-3. **UI 单实例**：重复启动必须把已有窗口提到前台（命名 mutex 或本地锁文件），不要开两个窗口连同一个 daemon。
+3. **UI 单实例**：重复启动必须把已有窗口提到前台，不要开两个窗口连同一个 daemon。
+   实现是两半：`SingleInstanceLock`（`<home>\instance.lock` 文件锁，判在位）+
+   `SingleInstanceSignal`（`Local\NetBirdUI-<home hash>-activate` 自动重置事件，唤醒并显示窗口）。
+   登录自启的 `--silent` 触发是唯一例外：直接退出，不抢前台。
 4. **关闭窗口 = 最小化到托盘**，退出走显式菜单项。UI 退出**不影响**连接 —— daemon 是系统服务，
    这条要写进 UI 文案，避免用户以为"关了 UI 就断网"。
 5. **不得在 `@Composable` 里发请求**：`Repository`（持有 `HttpClient`）+ `StateFlow`；
@@ -564,6 +567,7 @@ pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1
 | 配置便携 | 把整个发布目录复制到另一路径启动，主题与自启设置仍在（`ui\` 跟着走）；`config.json` 里的 `root` / `binary` 写相对路径也能解析 |
 | 自启动 | 打包态在「桌面」页开关后 `schtasks /Query /TN NetBirdUI /XML` 能读出任务且 `<Arguments>--silent</Arguments>`；开发态显示提示且开关禁用 |
 | 静默自启 | `netbird-multi-ui.exe --silent`：`Get-Process netbird-multi-ui` 的 `MainWindowHandle` 全为 0（没有窗口）、托盘有图标、网关可达；UI 已在跑时 `schtasks /Run /TN NetBirdUI` 不产生新进程也不抢前台 |
+| 单实例唤醒 | 已有实例在托盘时再启动一次启动器：窗口出现在前台（`MainWindowHandle` 从 0 变成非 0），进程数不变、不弹第二个窗口 |
 | 托盘 | 关闭窗口后进程仍在、托盘可恢复；右键菜单**中文正常**且不被任务栏裁切；退出菜单项真的退出 |
 | 图标 | 窗口标题栏与托盘都显示蓝色 NetBird mark；`createDistributable` 产出的 exe 图标一致（`ExtractAssociatedIcon` 可读） |
 | 裁剪 runtime | `rt\release` 的 `MODULES` 等于 `runtimeModules`，体积 ≈ 58 MB；用 `rt\bin\java.exe -cp "bin\App.jar;lib\*"` 跑探测：GBK/Unsafe/AWT/xml/TLS 全部可用；应用窗口、托盘、主题切换正常 |

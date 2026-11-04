@@ -10,8 +10,8 @@ import java.lang.foreign.ValueLayout
 /**
  * `ShellExecuteExW("runas")` —— 等价于资源管理器里的「以管理员身份运行」。
  *
- * 这是 Windows 唯一受支持的提权路径，不自己绕 UAC。只支持「exe + 工作目录」：
- * 调用方是 jpackage 启动器，参数都在 `app\` 的启动配置里，没有命令行要还原。
+ * 这是 Windows 唯一受支持的提权路径，不自己绕 UAC。命令行参数必须显式转交：
+ * 登录自启带 `--silent`，丢了它提权后的进程会弹出主窗口。
  *
  * 返回 `GetLastError()`：0 = 已拉起，[ERROR_CANCELLED] = 用户点了「否」，其余为失败。
  */
@@ -28,9 +28,21 @@ internal object WindowsRunAs {
     private const val INFO_SIZE = 112L
     private const val OFFSET_H_PROCESS = 104L
 
-    fun run(exe: String, workingDir: String, verb: String = "runas"): Int {
+    fun run(exe: String, workingDir: String, arguments: List<String> = emptyList(), verb: String = "runas"): Int {
         val api = Api.instance ?: return -1
-        return runCatching { api.shellExecuteEx(verb, exe, workingDir) }.getOrDefault(-1)
+        return runCatching { api.shellExecuteEx(verb, exe, workingDir, quoteArguments(arguments)) }.getOrDefault(-1)
+    }
+
+    /**
+     * `lpParameters` 是一条命令行字符串，不是数组：带空白或引号的参数要自己加引号。
+     * 目前的参数只有静默标志，这里按常见规则处理即可。
+     */
+    private fun quoteArguments(arguments: List<String>): String = arguments.joinToString(" ") { argument ->
+        if (argument.isNotEmpty() && argument.none { it == ' ' || it == '\t' || it == '"' }) {
+            argument
+        } else {
+            "\"" + argument.replace("\"", "\\\"") + "\""
+        }
     }
 
     private class Api(
@@ -77,7 +89,7 @@ internal object WindowsRunAs {
          * 32 lpParameters   40 lpDirectory   48 nShow   104 hProcess（ShellExecuteEx 写回）
          * ```
          */
-        fun shellExecuteEx(verb: String, file: String, workingDir: String): Int {
+        fun shellExecuteEx(verb: String, file: String, workingDir: String, parameters: String): Int {
             val arena = Arena.ofShared()
             try {
                 val state = arena.allocate(captureLayout)
@@ -91,7 +103,15 @@ internal object WindowsRunAs {
                 info.set(ValueLayout.ADDRESS, 8, MemorySegment.NULL)
                 info.set(ValueLayout.ADDRESS, 16, arena.allocateFrom(verb, Charsets.UTF_16LE))
                 info.set(ValueLayout.ADDRESS, 24, arena.allocateFrom(file, Charsets.UTF_16LE))
-                info.set(ValueLayout.ADDRESS, 32, MemorySegment.NULL)
+                info.set(
+                    ValueLayout.ADDRESS,
+                    32,
+                    if (parameters.isEmpty()) {
+                        MemorySegment.NULL
+                    } else {
+                        arena.allocateFrom(parameters, Charsets.UTF_16LE)
+                    },
+                )
                 info.set(ValueLayout.ADDRESS, 40, arena.allocateFrom(workingDir, Charsets.UTF_16LE))
                 info.set(ValueLayout.JAVA_INT, 48, SW_SHOWNORMAL)
                 info.set(ValueLayout.ADDRESS, OFFSET_H_PROCESS, MemorySegment.NULL)

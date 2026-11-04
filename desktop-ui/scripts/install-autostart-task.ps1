@@ -17,6 +17,9 @@
     与 hermes 的差异：这里的任务只拉起**界面**，每个配置的 daemon 仍由界面自己作为子进程
     管辖（ProfileSupervisor），所以「关闭窗口 = 最小化到托盘、daemon 继续跑」成立。
 
+    任务默认带 --silent（-Arguments 的默认值）：登录时只在托盘出现图标，不弹主窗口。
+    漏掉这个参数就退回「开机弹窗」，界面里的 reconcileAutostart 会在下次启动时把旧任务重写。
+
 .EXAMPLE
     # 开发态：登录后以管理员跑 gradlew :composeApp:run
     pwsh -NoProfile -File desktop-ui\scripts\install-autostart-task.ps1 `
@@ -36,7 +39,8 @@
 param(
     [string]$TaskName = 'NetBirdUI',
     [string]$Command,
-    [string]$Arguments = '',
+    # 默认只驻留托盘，不弹主窗口。开发态要覆盖它（例如 ':composeApp:run'）。
+    [string]$Arguments = '--silent',
     [string]$WorkingDirectory,
     [switch]$Remove,
     [switch]$Status

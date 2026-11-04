@@ -67,6 +67,34 @@ class DesktopConfigTest {
     }
 
     @Test
+    fun `a task without the silent flag is rewritten`() {
+        val store = FakeStore(DesktopConfig(autostart = null))
+        val preferences = UiPreferences(store)
+        val controller = FakeAutostart(
+            AutostartState.Enabled("""C:\app\netbird-multi-ui.exe""", silent = false),
+        )
+
+        val state = reconcileAutostart(preferences, controller)
+
+        assertEquals(listOf("enable"), controller.calls, "旧版本的任务要重建成静默启动")
+        assertTrue((state as AutostartState.Enabled).silent)
+        assertEquals(true, preferences.autostart.value, "重建之后系统现状仍然是启用")
+    }
+
+    @Test
+    fun `a task without the silent flag is not rewritten when autostart is off`() {
+        val store = FakeStore(DesktopConfig(autostart = false))
+        val preferences = UiPreferences(store)
+        val controller = FakeAutostart(
+            AutostartState.Enabled("""C:\app\netbird-multi-ui.exe""", silent = false),
+        )
+
+        reconcileAutostart(preferences, controller)
+
+        assertEquals(listOf("disable"), controller.calls, "反正要删掉，不必先重装")
+    }
+
+    @Test
     fun `development mode leaves everything alone`() {
         val store = FakeStore(DesktopConfig())
         val preferences = UiPreferences(store)

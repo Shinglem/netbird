@@ -11,7 +11,11 @@ sealed interface AutostartState {
 
     data object Disabled : AutostartState
 
-    data class Enabled(val target: String) : AutostartState
+    /**
+     * @property target 计划任务指向的启动器。
+     * @property silent 任务是否带静默标志。不带的话登录时会弹出主窗口，属于旧版本留下的任务。
+     */
+    data class Enabled(val target: String, val silent: Boolean = true) : AutostartState
 
     data class Failed(val message: String) : AutostartState
 }
@@ -41,8 +45,16 @@ interface Autostart {
  * 不会因为默认值被悄悄删掉。读状态失败（[AutostartState.Failed]）时不动配置。
  */
 fun reconcileAutostart(preferences: UiPreferences, controller: Autostart): AutostartState {
-    val current = controller.state()
+    var current = controller.state()
     if (current is AutostartState.Unsupported) return current
+
+    // 旧版本建的任务不带静默参数，登录时会弹出主窗口；重建成当前形式。
+    // 用户明确关掉自启时不做这一步 —— 反正接下来就删掉了。
+    if (current is AutostartState.Enabled && !current.silent && preferences.autostart.value != false) {
+        val upgraded = controller.enable()
+        if (upgraded is AutostartState.Failed) return upgraded
+        current = upgraded
+    }
 
     val desired = preferences.autostart.value
     if (desired == null) {

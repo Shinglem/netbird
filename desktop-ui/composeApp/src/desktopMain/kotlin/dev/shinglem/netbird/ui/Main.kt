@@ -22,6 +22,7 @@ import dev.shinglem.netbird.ui.app.SingleInstanceLock
 import dev.shinglem.netbird.ui.app.TrayMenuItem
 import dev.shinglem.netbird.ui.app.WindowsAutostart
 import dev.shinglem.netbird.ui.app.appIconImage
+import dev.shinglem.netbird.ui.app.isSilentStart
 import dev.shinglem.netbird.ui.daemon.DesktopDaemonLauncher
 import dev.shinglem.netbird.ui.data.AppEnvironment
 import dev.shinglem.netbird.ui.data.AutostartState
@@ -43,20 +44,25 @@ import kotlinx.coroutines.launch
  *
  * 每个配置一个 daemon 子进程（见 `ProfileSupervisor`）。关窗口只收进托盘，daemon 继续运行 ——
  * 用户关掉界面不应该断网；真正的退出走托盘菜单，那时才停掉本次拉起的全部 daemon。
+ *
+ * 带 `--silent`（登录自启的计划任务就是这么起的）时窗口不进入组合，只在托盘常驻。
  */
-fun main() {
+fun main(args: Array<String>) {
+    val silent = isSilentStart(args.asList())
     val paths = AppPathsResolver.resolve()
     val lockFile = File(paths.home, "instance.lock")
 
     // 第一步只能是**只读探测**：下面未提权时会 runas 重启自己，旧进程若仍持着锁，
     // 提权后的新进程会把自己判成"第二个实例"而去唤醒那个正要退出的旧进程，形成活锁。
     if (SingleInstanceLock.isRunning(lockFile)) {
-        System.err.println("NetBird UI 已在运行（锁文件 $lockFile）")
+        // 静默触发（登录自启）撞上已经在跑的那一份时直接退出：用户正在用，别把窗口抢到前台。
+        if (!silent) System.err.println("NetBird UI 已在运行（锁文件 $lockFile）")
         return
     }
 
     if (!Elevation.isElevated()) {
-        val outcome = Elevation.relaunchElevated()
+        // 参数要带给提权后的新进程，否则登录自启会变成弹窗启动。
+        val outcome = Elevation.relaunchElevated(args.toList())
         when (outcome) {
             Elevation.Relaunch.STARTED -> return
             Elevation.Relaunch.CANCELLED -> {
@@ -122,7 +128,7 @@ fun main() {
     Runtime.getRuntime().addShutdownHook(Thread { controller.shutdown() })
 
     application {
-        var windowVisible by remember { mutableStateOf(true) }
+        var windowVisible by remember { mutableStateOf(!silent) }
         val closeToTray by preferences.closeToTray.collectAsState()
         var trayForQuit: DesktopTray? = null
 
@@ -155,7 +161,11 @@ fun main() {
         }
         trayForQuit = tray
 
-        LaunchedEffect(Unit) { tray.install() }
+        LaunchedEffect(Unit) {
+            val installed = tray.install()
+            // 静默启动时托盘是唯一入口：装不上就把窗口显示出来，否则界面等于彻底消失。
+            if (!installed && silent) windowVisible = true
+        }
         DisposableEffect(Unit) { onDispose { tray.dispose() } }
 
         if (windowVisible) {

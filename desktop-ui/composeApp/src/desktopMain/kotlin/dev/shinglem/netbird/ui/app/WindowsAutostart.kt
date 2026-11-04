@@ -20,8 +20,10 @@ object WindowsAutostart : Autostart {
     override fun state(): AutostartState {
         if (!isWindows()) return AutostartState.Unsupported
         val launcher = Elevation.launcherExe() ?: return AutostartState.Unsupported
-        if (!taskExists()) return AutostartState.Disabled
-        return AutostartState.Enabled(queryCommand() ?: launcher.absolutePath)
+        val xml = queryXml() ?: return AutostartState.Disabled
+        val command = extractTag(xml, "Command") ?: launcher.absolutePath
+        val arguments = extractTag(xml, "Arguments").orEmpty()
+        return AutostartState.Enabled(command, silent = isSilentStart(arguments))
     }
 
     override fun enable(): AutostartState {
@@ -33,7 +35,8 @@ object WindowsAutostart : Autostart {
         val xml = autostartTaskXml(
             taskName = TASK_NAME,
             command = launcher.absolutePath,
-            arguments = "",
+            // 登录时只驻留托盘；否则每次开机都弹一个主窗口。
+            arguments = SILENT_START_ARGUMENT,
             workingDirectory = workDir.absolutePath,
             user = currentUser(),
         )
@@ -66,12 +69,14 @@ object WindowsAutostart : Autostart {
 
     private fun taskExists(): Boolean = exec("schtasks", "/Query", "/TN", TASK_NAME).exitCode == 0
 
-    private fun queryCommand(): String? {
+    private fun queryXml(): String? {
         val result = exec("schtasks", "/Query", "/TN", TASK_NAME, "/XML")
-        if (result.exitCode != 0) return null
-        val match = Regex("<Command>(.*?)</Command>", RegexOption.DOT_MATCHES_ALL).find(result.output)
-        return match?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+        return if (result.exitCode == 0) result.output else null
     }
+
+    private fun extractTag(xml: String, tag: String): String? =
+        Regex("<$tag>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
 
     private fun currentUser(): String {
         val domain = System.getenv("USERDOMAIN").orEmpty().ifBlank { System.getenv("COMPUTERNAME").orEmpty() }

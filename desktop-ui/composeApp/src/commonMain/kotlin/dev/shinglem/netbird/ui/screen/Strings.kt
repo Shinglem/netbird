@@ -101,7 +101,7 @@ object Strings {
     const val DESKTOP_MODE = "明暗模式"
     const val DESKTOP_SECTION_STARTUP = "启动与托盘"
     const val DESKTOP_AUTOSTART = "开机自启"
-    const val DESKTOP_AUTOSTART_ON = "已启用：登录时以管理员权限启动界面，不弹 UAC。"
+    const val DESKTOP_AUTOSTART_ON = "已启用：登录时以管理员权限在托盘启动，不弹 UAC，也不弹出主窗口。"
     const val DESKTOP_AUTOSTART_OFF = "未启用。打开后会创建计划任务 NetBirdUI。"
     const val DESKTOP_AUTOSTART_DEV =
         "开发态不能在界面里安装自启动：没有 jpackage 启动器，也拿不到稳定的启动命令。" +

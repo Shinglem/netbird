@@ -9,7 +9,7 @@ class AutostartTaskXmlTest {
     private val xml = autostartTaskXml(
         taskName = "NetBirdUI",
         command = """C:\app & tools\netbird-multi-ui.exe""",
-        arguments = "",
+        arguments = SILENT_START_ARGUMENT,
         workingDirectory = """C:\app & tools""",
         user = "WORKGROUP\\alice",
     )
@@ -21,6 +21,14 @@ class AutostartTaskXmlTest {
         assertTrue(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"), "默认 72 小时会连 daemon 一起杀掉")
         assertTrue(xml.contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"))
         assertTrue(xml.contains("<URI>\\NetBirdUI</URI>"))
+    }
+
+    @Test
+    fun startsHiddenInsteadOfShowingTheWindow() {
+        assertTrue(
+            xml.contains("<Arguments>--silent</Arguments>"),
+            "登录自启必须静默：不带这个参数，每次开机都会弹主窗口",
+        )
     }
 
     @Test

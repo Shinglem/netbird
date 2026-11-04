@@ -261,6 +261,9 @@ daemon 侧的上下文就被取消，状态里随后冒出 `wait for signal stre
 - **退出界面**（托盘「退出」）：`controller.shutdown()` 逐个 `terminate` 本进程拉起的 daemon。
   不扫进程表、不按名字杀，所以碰不到官方安装器或别的部署。
 - **关闭窗口 ≠ 退出**：默认只收进托盘（`closeToTray`，可在「桌面」页关掉），daemon 继续跑。
+- **登录自启是静默的**：计划任务 `NetBirdUI` 带 `--silent`（`--tray` 是别名），
+  此时主窗口不进入组合，只有托盘图标；托盘装不上时会自动把窗口显示出来，
+  否则界面等于彻底消失。旧版本装的任务不带这个参数，`reconcileAutostart` 启动时重建成新形式。
 - **记录随操作走**：界面里点启动/停止/全部启动/全部停止都会改写 `ui\state.json`，
   所以「我停掉了它」就等于「下次界面启动不要自动起它」。删除配置时它的记录一并清掉。
 - **不要写进 `instance.json`**：那个文件属于部署脚本（含 fqdn / domains），桌面端只读不改写。
@@ -346,6 +349,10 @@ pwsh -NoProfile -File desktop-ui\scripts\install-autostart-task.ps1 -Remove
 任务声明 `RunLevel=HighestAvailable` + `LogonType=InteractiveToken`，`ExecutionTimeLimit=PT0S`
 （否则 72 小时到点会连带杀掉界面管辖的 daemon）。**任务只拉起界面**：每个配置的 daemon 仍是
 界面的子进程（`ProfileSupervisor`），所以关窗口只收进托盘、daemon 继续跑。
+
+**`<Arguments>` 必须是 `--silent`**：界面和脚本都默认写它，登录时只驻留托盘、不弹主窗口。
+手写任务时漏掉它，每次开机都会跳出一个主窗口。开发态示例用 `-Arguments ":composeApp:run"` 覆盖
+默认值（gradle 自己也有同名的静默日志开关，别把两者搞混）。
 
 ---
 
@@ -555,7 +562,8 @@ pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1
 | 桌面设置 | 顶部「新建配置」右边是「桌面」入口（不在左侧 rail）；切换配色/明暗后重启界面，选择仍在；`ui\ui.custom.json` 里只出现改过的键 |
 | 配置升级不丢 | 改过主题后替换 `ui\ui.json`（模拟新版默认值），重启界面：用户改过的键保留，没改过的键跟随新默认值；全部改回默认时 `ui.custom.json` 自动消失 |
 | 配置便携 | 把整个发布目录复制到另一路径启动，主题与自启设置仍在（`ui\` 跟着走）；`config.json` 里的 `root` / `binary` 写相对路径也能解析 |
-| 自启动 | 打包态在「桌面」页开关后 `schtasks /Query /TN NetBirdUI /XML` 能读出任务；开发态显示提示且开关禁用 |
+| 自启动 | 打包态在「桌面」页开关后 `schtasks /Query /TN NetBirdUI /XML` 能读出任务且 `<Arguments>--silent</Arguments>`；开发态显示提示且开关禁用 |
+| 静默自启 | `netbird-multi-ui.exe --silent`：`Get-Process netbird-multi-ui` 的 `MainWindowHandle` 全为 0（没有窗口）、托盘有图标、网关可达；UI 已在跑时 `schtasks /Run /TN NetBirdUI` 不产生新进程也不抢前台 |
 | 托盘 | 关闭窗口后进程仍在、托盘可恢复；右键菜单**中文正常**且不被任务栏裁切；退出菜单项真的退出 |
 | 图标 | 窗口标题栏与托盘都显示蓝色 NetBird mark；`createDistributable` 产出的 exe 图标一致（`ExtractAssociatedIcon` 可读） |
 | 裁剪 runtime | `rt\release` 的 `MODULES` 等于 `runtimeModules`，体积 ≈ 58 MB；用 `rt\bin\java.exe -cp "bin\App.jar;lib\*"` 跑探测：GBK/Unsafe/AWT/xml/TLS 全部可用；应用窗口、托盘、主题切换正常 |

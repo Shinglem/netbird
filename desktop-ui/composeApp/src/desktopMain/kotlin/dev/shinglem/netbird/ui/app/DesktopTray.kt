@@ -41,11 +41,12 @@ class DesktopTray(
 ) {
     private var trayIcon: TrayIcon? = null
 
-    fun install() {
-        if (trayIcon != null) return
+    /** 装上托盘图标；返回是否真的装上了 —— 静默启动时这是唯一的入口。 */
+    fun install(): Boolean {
+        if (trayIcon != null) return true
         if (!SystemTray.isSupported()) {
             System.err.println("当前平台不支持托盘图标")
-            return
+            return false
         }
         val iconToAdd = TrayIcon(icon).apply {
             isImageAutoSize = true
@@ -61,10 +62,11 @@ class DesktopTray(
         } catch (failure: Exception) {
             // 托盘区满或被策略禁用：不该因此让整个应用起不来。
             System.err.println("无法添加托盘图标：$failure")
-            return
+            return false
         }
         iconToAdd.addActionListener { onActivate() }
         trayIcon = iconToAdd
+        return true
     }
 
     fun dispose() {

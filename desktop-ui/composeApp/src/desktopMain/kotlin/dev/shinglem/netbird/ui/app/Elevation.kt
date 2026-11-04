@@ -52,11 +52,16 @@ object Elevation {
         File(path).takeIf { it.isFile }
     }.getOrNull()
 
-    /** 以管理员身份重新拉起启动器；返回 [Relaunch.STARTED] 时调用方必须立刻退出。 */
-    fun relaunchElevated(): Relaunch {
+    /**
+     * 以管理员身份重新拉起启动器；返回 [Relaunch.STARTED] 时调用方必须立刻退出。
+     *
+     * [arguments] 必须原样带给新进程 —— 登录自启靠 `--silent` 决定要不要显示窗口，
+     * 丢了参数就变成弹窗启动。
+     */
+    fun relaunchElevated(arguments: List<String> = emptyList()): Relaunch {
         val exe = launcherExe() ?: return Relaunch.NOT_PACKAGED
         val workingDir = exe.absoluteFile.parentFile?.absolutePath ?: return Relaunch.FAILED
-        return when (WindowsRunAs.run(exe.absolutePath, workingDir)) {
+        return when (WindowsRunAs.run(exe.absolutePath, workingDir, arguments)) {
             0 -> Relaunch.STARTED
             WindowsRunAs.ERROR_CANCELLED -> Relaunch.CANCELLED
             else -> Relaunch.FAILED

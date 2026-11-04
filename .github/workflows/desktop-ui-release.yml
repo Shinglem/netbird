@@ -118,8 +118,13 @@ jobs:
           $hash = (Get-FileHash wintun.zip -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:WINTUN_SHA256) { throw "wintun 校验失败：$hash" }
           Expand-Archive wintun.zip -DestinationPath wintun -Force
+          # Expand-Archive 不剥离单一顶层目录：解压在 wintun\wintun\bin\<arch>\ 下。
+          $dll = Get-ChildItem wintun -Recurse -Filter 'wintun.dll' |
+            Where-Object { $_.DirectoryName -match '[\\/]amd64$' } |
+            Select-Object -First 1
+          if (-not $dll) { throw 'wintun 包里没有 amd64\wintun.dll' }
           New-Item -ItemType Directory -Force release-test | Out-Null
-          Copy-Item 'wintun\bin\amd64\wintun.dll' 'release-test\wintun.dll' -Force
+          Copy-Item $dll.FullName 'release-test\wintun.dll' -Force
 
       - name: 构建后端（含本 fork 的多实例补丁）
         if: steps.ver.outputs.skip != 'true'

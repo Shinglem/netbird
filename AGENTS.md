@@ -1011,6 +1011,8 @@ rebase 时这个文件必然冲突，解决方式是保留本文件（我们的�
 5. **出 Windows 成品只走 `:composeApp:verifyReleaseTest`**（内部先 `syncReleaseTest`：jlink 裁剪
    `rt\` + jpackage 只产启动器 + 自写 cfg + jar 镜像，然后校验结构/模块集合/skiko 资产）。
    `createDistributable` 只是开发态 app-image，**不是成品**；也不要手改 `release-test\` 里的构建产物。
+   **发布命名是硬性规则**：tag、Release 名称、文件名都用 `v{本仓库版本}-{上游版本}`
+   （文件名 `netbird-multi-ui-<tag>-windows-x64.zip`），细则见 `desktop-ui/AGENTS.md` §5。
 
 （第 1、2 条的完整理由与证据行号见 `.ai/skill/netbird-desktop-ui-contract/`；
 第 5 条的结构与打包态坑见 `.ai/skill/desktop-release-packaging/`。）

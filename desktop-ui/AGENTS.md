@@ -464,6 +464,23 @@ pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1 -SkipBackend 
 `verifyReleaseTest` 会拦住：缺 `rt\`、cfg 被改坏、`rt\` 模块集合与 `runtimeModules` 不一致、
 skiko 的 dll/`icudtl.dat` 缺失、`lib\` 依赖镜像不完整。它失败时**修根因**，不要改校验。
 
+#### 发布命名（硬性规则）
+
+版本串统一是 `v{本仓库版本}-{上游版本}`，**五处必须一致**：
+
+| 位置 | 形式 | 例 |
+|---|---|---|
+| git tag | `v<本仓库版本>-<上游版本>` | `v0.1.1-0.82.0` |
+| GitHub Release 名称 | 同 tag 串，不加产品名后缀 | `v0.1.1-0.82.0` |
+| 发布包文件名 | `netbird-multi-ui-<tag>-windows-x64.zip` | `netbird-multi-ui-v0.1.1-0.82.0-windows-x64.zip` |
+| 包内 README 标题 | `NetBird 多实例桌面端 <本仓库版本>（上游基线 <上游版本>）` | `… 0.1.1（上游基线 0.82.0）` |
+| 二进制 `jpackage.app-version` | 只能是数字点分：只用本仓库版本 | `0.1.1` |
+
+- **本仓库版本** = `composeApp/build.gradle.kts` 的 `appVersion`（改它 = 发版）。
+- **上游版本** = `git describe --tags --abbrev=0`（rebase 到的上游 tag）。
+- 包内顶层目录固定叫 `netbird-multi-ui`（不带版本），并带空的 `profiles\` 与 `README.txt`。
+- 打包**不得**包含 `profiles\` 下的内容、`ui\ui.custom.json`、`instance.lock` —— 那些含私钥与本机偏好。
+
 只想确认"现有目录有没有被手改过"时用 `:composeApp:checkReleaseTest`（不同步，只校验）；
 它比 `verifyReleaseTest` 少一次重建，适合发出去之前最后一眼。
 

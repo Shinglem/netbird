@@ -29,7 +29,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.shinglem.netbird.ui.api.LoginResponse
 import dev.shinglem.netbird.ui.api.NsGroupState
@@ -41,6 +40,7 @@ import dev.shinglem.netbird.ui.daemon.DaemonState
 import dev.shinglem.netbird.ui.daemon.ProfileSupervisor
 import dev.shinglem.netbird.ui.data.UiState
 import dev.shinglem.netbird.ui.profile.Profile
+import dev.shinglem.netbird.ui.theme.appMonoFontFamily
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -191,7 +191,7 @@ fun ConnectPage(profile: Profile, supervisor: ProfileSupervisor) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(failure.title, style = MaterialTheme.typography.titleMedium)
                     failure.detail?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = appMonoFontFamily())
                     }
                 }
             }
@@ -280,13 +280,13 @@ private fun LoginCard(
                     Text(
                         text = Strings.LOGIN_CODE_LABEL + ": " + prompt.userCode,
                         style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = appMonoFontFamily(),
                     )
                     Text(Strings.LOGIN_URL_LABEL, style = MaterialTheme.typography.bodySmall)
                     Text(
                         text = prompt.verificationURIComplete.ifBlank { prompt.verificationURI },
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = appMonoFontFamily(),
                     )
                 }
             }

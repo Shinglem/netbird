@@ -57,7 +57,7 @@ release-test/
 
 | 任务 | 关键参数 / 行为 |
 |---|---|
-| `linkRuntime` | `jlink --module-path <jdk>\jmods --add-modules <清单> --strip-debug --no-header-files --no-man-pages --compress=zip-9` |
+| `linkRuntime` | `jlink --add-modules <清单> --strip-debug --no-header-files --no-man-pages --compress=zip-9`；有 `jmods/` 时加 `--module-path <jdk>\jmods`，没有就走 JDK 24+ 的 **JEP 493**（Temurin 27 属于这种） |
 | `jpackageLauncher` | `jpackage --type app-image --runtime-image <空目录> --icon …`，input 只放一份 App.jar |
 | `launcherBundle` | 拷 exe + **自写** cfg（`app.runtime=$ROOTDIR\rt`、`bin\App.jar`、`lib\*`） |
 | `syncReleaseTest` | `Sync` 到 `<repo>\release-test`，`preserve` 用户数据与后端二进制 |
@@ -97,7 +97,7 @@ release-test/
 | `Sync` 报 `Access denied`，覆盖 exe 失败 | jpackage 产出的 exe 带 **ReadOnly** 属性 | 覆盖前 `setWritable(true)`；递归删除也要先清只读 |
 | 启动器找不到 JVM / 直接退出 | cfg 里 `app.runtime` 指错，或 `rt\` 被删/改名 | `rt\` 是硬依赖，校验 `rt\bin\server\jvm.dll` |
 | 启动后 `NoClassDefFoundError` | `runtimeModules` 少了反射/服务加载用的模块 | 按上表补；用裁剪 runtime 做冒烟 |
-| `jlink` 报找不到模块 / 产物是空 | JDK 没有 `jmods/`（`jbr-*` 是纯运行时，`jbrsdk-*` 才有） | 换 `jbrsdk`，或在构建里 fail 掉而不是静默跳过 |
+| `jlink` 报找不到模块 / 产物是空 | 拿的是 JRE（没有 `bin\jlink.exe`），或 JDK 既无 `jmods/` 又没开 JEP 493 | 换成官方 JDK（Temurin 27 无 `jmods/`，靠 JEP 493 从运行时镜像裁剪）；构建里保留这条回退，拿 JRE 时直接失败而不是静默跳过 |
 | 单独用 `java -cp` 起成品就崩 skiko | 少了 `-Dskiko.library.path` / `-Dcompose.application.configure.swing.globals=true` | 从 `app\*.cfg` 抄参数，不要自己拼 |
 | 换了图标，exe 还是旧图标 | ① 没重新 jpackage；② Windows 图标缓存 | 确认 exe 时间/大小变了，再 `ie4uinit.exe -show`；仍旧则重启 explorer |
 
@@ -129,6 +129,24 @@ release-test/
    启动后用 `MainWindowTitle` 找到实际 UI 进程截图；关闭它同样需要 UAC。
 4. **截图与注入**：见技能 `dev-desktop-gui-e2e-testing`。提权窗口（UIPI）普通权限注入无效，
    别去点它。
+
+## CI 自动发布（本仓库）
+
+`.github/workflows/desktop-ui-release.yml` 把上面这条链搬到 windows-latest：
+
+1. `actions/setup-java` 装 Temurin 27（**不要**换成 JBR：`rt\` 与开发态必须是同一份运行时）；
+2. 下载 wintun 0.14.1（带 sha256 校验）并 `go build` 出 `netbird-multi.exe`；
+3. `gradlew :composeApp:verifyReleaseTest` —— jlink（有 `jmods/` 用，没有走 JEP 493）与
+   jpackage 只产启动器都在这里发生；
+4. `desktop-ui/scripts/package-release.ps1` 打 zip（顶层 `netbird-multi-ui\`，不含用户数据）；
+5. `gh release create/upload`（tag 已存在则覆盖资产）。
+
+本地与 CI 共用同一个打包脚本，**不要**在 workflow 里另写一套复制/压缩逻辑 —— 两套必然漂移。
+
+```powershell
+# 本地等价动作（需先有 release-test）：
+pwsh -NoProfile -File desktop-ui\scripts\package-release.ps1 -Tag v0.1.2-0.82.0
+```
 
 ## 反例
 

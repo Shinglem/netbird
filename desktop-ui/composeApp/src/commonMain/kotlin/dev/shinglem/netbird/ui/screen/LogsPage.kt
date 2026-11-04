@@ -26,10 +26,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.shinglem.netbird.ui.api.SystemEvent
 import dev.shinglem.netbird.ui.daemon.ProfileSupervisor
+import dev.shinglem.netbird.ui.theme.appMonoFontFamily
 
 @Composable
 fun LogsPage(supervisor: ProfileSupervisor) {
@@ -114,7 +114,7 @@ private fun DaemonLog(lines: List<String>, autoScroll: Boolean, modifier: Modifi
         Text(
             text = lines.ifEmpty { listOf(Strings.LOG_EMPTY) }.joinToString("\n"),
             style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = appMonoFontFamily(),
         )
     }
 }

@@ -1,0 +1,6 @@
+Inter 字体（Inter-Regular.otf / Inter-SemiBold.otf）
+版权：Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+许可：SIL Open Font License 1.1（https://scripts.sil.org/OFL）
+允许随应用一起分发；保留本说明，不得单独售卖。
+
+来源：JetBrains Runtime 25 的 lib/fonts（与 JBR 上观感一致的那一份）。

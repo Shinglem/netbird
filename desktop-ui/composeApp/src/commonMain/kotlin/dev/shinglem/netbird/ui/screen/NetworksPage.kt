@@ -24,11 +24,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.shinglem.netbird.ui.api.NetworkRoute
 import dev.shinglem.netbird.ui.daemon.ProfileSupervisor
 import dev.shinglem.netbird.ui.data.UiState
+import dev.shinglem.netbird.ui.theme.appMonoFontFamily
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -139,7 +139,7 @@ private fun NetworkRow(route: NetworkRoute, enabled: Boolean, onToggle: (Boolean
             enabled = enabled,
         )
         Column(Modifier.weight(1f)) {
-            Text(route.range, style = MaterialTheme.typography.bodyLarge, fontFamily = FontFamily.Monospace)
+            Text(route.range, style = MaterialTheme.typography.bodyLarge, fontFamily = appMonoFontFamily())
             if (route.domains.isNotEmpty()) {
                 Text(
                     text = Strings.NETWORKS_DOMAINS + ": " + route.domains.joinToString("，"),

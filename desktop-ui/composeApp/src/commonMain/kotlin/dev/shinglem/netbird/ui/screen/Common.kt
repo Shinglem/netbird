@@ -17,8 +17,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import dev.shinglem.netbird.ui.theme.appMonoFontFamily
 import kotlin.math.round
 
 /** 状态语义色；具体颜色在 [toneColor] 里映射到 M3 主题。 */
@@ -58,7 +58,7 @@ fun InfoRow(label: String, value: String, mono: Boolean = false) {
         Text(
             text = value.ifBlank { Strings.DASH },
             style = MaterialTheme.typography.bodyMedium,
-            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+            fontFamily = if (mono) appMonoFontFamily() else null,
             modifier = Modifier.weight(1f),
         )
     }

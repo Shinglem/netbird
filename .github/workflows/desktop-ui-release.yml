@@ -1,0 +1,232 @@
+# 桌面 UI 的自动发布：推 tag（或手动触发）→ 编译后端 → jlink 裁剪 + jpackage 启动器
+# → verifyReleaseTest 校验 → 打 zip → 创建/覆盖 GitHub Release。
+#
+# 版本口径（desktop-ui/AGENTS.md「发布命名」）：tag = v<本仓库版本>-<上游版本>，
+# 例如 v0.1.2-0.82.0；本仓库版本必须等于 composeApp/build.gradle.kts 的 appVersion。
+#
+# 为什么在 CI 里从头构建而不是复用本地 release-test：
+#   rt\ 与启动器都是构建产物（jlink / jpackage 产出），换 JDK 就必须重建；
+#   让 CI 用与开发态相同的 JDK 27 走同一条 :composeApp:verifyReleaseTest，才不会分叉。
+#
+# 上游 rc tag（v0.82.0-rc.1）也会命中 `v*-*`，解析步骤会识别成非本仓库 tag 并跳过。
+
+name: desktop-ui-release
+
+on:
+  push:
+    tags:
+      - 'v*-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布 tag（v<本仓库版本>-<上游版本>，例如 v0.1.2-0.82.0）；留空 = 用 appVersion + 最近上游 tag 推导'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-ui-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JDK_VERSION: '27'
+  WINTUN_URL: https://pkgs.netbird.io/wintun/wintun-0.14.1.zip
+  WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # 手动触发时要靠 tag 历史推导上游版本。
+          fetch-depth: 0
+
+      - name: 安装 JDK 27（Temurin：jlink / jpackage / 成品 rt\ 同源）
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_VERSION }}
+          cache: gradle
+
+      - name: 安装 Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Gradle 缓存
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: 解析发布 tag
+        id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $declared = (Select-String -Path 'desktop-ui\composeApp\build.gradle.kts' `
+              -Pattern '^val appVersion = "([^"]+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+          Write-Host "appVersion = $declared"
+
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG.Trim() }
+            elseif ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME }
+            else { '' }
+
+          if (-not $tag) {
+            # 本仓库的发布 tag 带 `-<上游>`，上游 tag 是纯 vX.Y.Z —— 只取后者。
+            $upstreamTag = git tag --list 'v*' --sort=-v:refname |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+              Select-Object -First 1
+            if (-not $upstreamTag) { throw '找不到上游 tag（vX.Y.Z）；检查 checkout 的 fetch-depth' }
+            $tag = "v$declared-$($upstreamTag.TrimStart('v'))"
+          }
+
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)$') {
+            Write-Warning "tag '$tag' 不是本仓库的发布 tag（v<本仓库>-<上游>），跳过"
+            "skip=true" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $desktop = $Matches[1]
+          $upstream = $Matches[2]
+          if ($desktop -ne $declared) {
+            throw "tag 里的版本 $desktop 与 build.gradle.kts 的 appVersion $declared 不一致（先改版本再发）"
+          }
+
+          Write-Host "发布 tag = $tag（本仓库 $desktop / 上游 $upstream）"
+          "skip=false" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "desktop=$desktop" >> $env:GITHUB_OUTPUT
+          "upstream=$upstream" >> $env:GITHUB_OUTPUT
+          "asset=netbird-multi-ui-$tag-windows-x64" >> $env:GITHUB_OUTPUT
+
+      - name: 下载 wintun（后端运行时依赖）
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          curl.exe -sSL --retry 3 -o wintun.zip $env:WINTUN_URL
+          if ($LASTEXITCODE -ne 0) { throw "下载 wintun 失败，exit=$LASTEXITCODE" }
+          $hash = (Get-FileHash wintun.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:WINTUN_SHA256) { throw "wintun 校验失败：$hash" }
+          Expand-Archive wintun.zip -DestinationPath wintun -Force
+          New-Item -ItemType Directory -Force release-test | Out-Null
+          Copy-Item 'wintun\bin\amd64\wintun.dll' 'release-test\wintun.dll' -Force
+
+      - name: 构建后端（含本 fork 的多实例补丁）
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location client
+          try {
+            $env:CGO_ENABLED = '0'
+            go build -o ..\release-test\netbird-multi.exe .
+            if ($LASTEXITCODE -ne 0) { throw "go build 失败，exit=$LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          Write-Host "netbird-multi.exe = $((Get-Item 'release-test\netbird-multi.exe').Length) B"
+
+      - name: 出成品（jlink 裁剪 + jpackage 启动器 + 结构与模块校验）
+        if: steps.ver.outputs.skip != 'true'
+        working-directory: desktop-ui
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\gradlew.bat :composeApp:verifyReleaseTest --console=plain
+          if ($LASTEXITCODE -ne 0) { throw "verifyReleaseTest 失败，exit=$LASTEXITCODE" }
+
+      - name: 打发布包
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ steps.ver.outputs.tag }}'
+          & .\desktop-ui\scripts\package-release.ps1 -Tag $tag -OutDir 'C:\out'
+          if ($LASTEXITCODE -ne 0) { throw "打发布包失败，exit=$LASTEXITCODE" }
+          Get-ChildItem 'C:\out' | Format-Table Name, Length
+
+      - name: 保留构建产物
+        if: steps.ver.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ steps.ver.outputs.asset }}
+          path: |
+            C:\out\*.zip
+            C:\out\SHA256SUMS.txt
+          retention-days: 7
+
+      - name: 创建/覆盖 GitHub Release
+        if: steps.ver.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          DESKTOP: ${{ steps.ver.outputs.desktop }}
+          UPSTREAM: ${{ steps.ver.outputs.upstream }}
+          ASSET: ${{ steps.ver.outputs.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          $zip = "C:\out\$env:ASSET.zip"
+          $sums = 'C:\out\SHA256SUMS.txt'
+          if (-not (Test-Path $zip)) { throw "缺少发布包：$zip" }
+
+          $sizeMb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          $notes = @(
+            "NetBird 多实例桌面端 **$env:DESKTOP**（上游基线 **$env:UPSTREAM**，Windows x64）。"
+            ''
+            "运行记录：https://github.com/$repo/actions/runs/$env:GITHUB_RUN_ID"
+            ''
+            '## 这一版'
+            ''
+            '- 运行时基线换成官方 **Temurin 27**；`rt\` 是 jlink 裁剪产物（9 个模块，约 48 MB，无 `jmods` 走 JEP 493）。'
+            '- 界面内置 **Inter / JetBrains Mono**（SIL OFL 1.1），中文回退系统字体；补齐 Swing 文本抗锯齿与 UTF-8 输出编码。'
+            '- 后端 `netbird-multi.exe` 由本仓库源码构建，含多实例补丁集（独立 wintun GUID 与 NRPT 前缀）。'
+            ''
+            '## 安装'
+            ''
+            "1. 下载 ``$env:ASSET.zip``（约 $sizeMb MB），解压到任意目录（顶层是 ``netbird-multi-ui\``）。"
+            '2. 双击 `netbird-multi-ui.exe`，首次启动请求一次管理员权限（要建虚拟网卡）。'
+            '3. 首次使用按 `README.txt` 新建配置；`profiles\` 里是该实例的完整身份（含私钥），不要外传。'
+            ''
+            '## 校验'
+            ''
+            '```'
+            'Get-FileHash .\netbird-multi-ui-*.zip -Algorithm SHA256'
+            '# 与 SHA256SUMS.txt 比对'
+            '```'
+          )
+          $notesPath = 'C:\out\RELEASE_NOTES.md'
+          Set-Content $notesPath ($notes -join "`n") -Encoding utf8NoBOM
+
+          gh release view $env:TAG --repo $repo 2>$null
+          $exists = $LASTEXITCODE -eq 0
+          $ok = $false
+          for ($i = 1; $i -le 4 -and -not $ok; $i++) {
+            if ($exists) {
+              Write-Warning "$env:TAG 已存在，改为覆盖上传"
+              gh release edit $env:TAG --repo $repo --target $env:GITHUB_SHA --title $env:TAG --notes-file $notesPath
+            } else {
+              gh release create $env:TAG --repo $repo --target $env:GITHUB_SHA --title $env:TAG --notes-file $notesPath
+            }
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Warning "创建/更新 Release 第 $i 次失败（exit=$LASTEXITCODE），$($i * 5) 秒后重试"
+            Start-Sleep -Seconds ($i * 5)
+          }
+          if (-not $ok) { throw '创建/更新 Release 连续失败' }
+
+          $uploaded = $false
+          for ($i = 1; $i -le 4 -and -not $uploaded; $i++) {
+            gh release upload $env:TAG $zip $sums --repo $repo --clobber
+            if ($LASTEXITCODE -eq 0) { $uploaded = $true; break }
+            Write-Warning "上传第 $i 次失败（exit=$LASTEXITCODE），$($i * 5) 秒后重试"
+            Start-Sleep -Seconds ($i * 5)
+          }
+          if (-not $uploaded) { throw 'gh release upload 连续失败' }
+          Write-Host "已发布 https://github.com/$repo/releases/tag/$env:TAG"

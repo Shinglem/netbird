@@ -53,7 +53,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.shinglem.netbird.ui.daemon.DaemonState
 import dev.shinglem.netbird.ui.daemon.ProfileSupervisor
@@ -63,6 +62,7 @@ import dev.shinglem.netbird.ui.data.ProfilesController
 import dev.shinglem.netbird.ui.data.UiPreferences
 import dev.shinglem.netbird.ui.profile.Profile
 import dev.shinglem.netbird.ui.theme.NetBirdTheme
+import dev.shinglem.netbird.ui.theme.appMonoFontFamily
 
 /** 主窗口的功能页，都是「当前实例」的内容；全局设置走顶部的「桌面」入口。 */
 enum class AppTab(val label: String) {
@@ -478,7 +478,7 @@ private fun EmptyState(profilesRoot: String) {
         Text(
             text = profilesRoot,
             style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = appMonoFontFamily(),
         )
     }
 }

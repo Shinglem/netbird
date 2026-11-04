@@ -48,7 +48,7 @@ CMP 项目 **简单得多** ——
 
 | 层 | 选型 | 说明 |
 |---|---|---|
-| 语言 / 运行时 | Kotlin 2.4.x + JDK 25（Temurin；本机路径见 `.local/environment.md`） | 编译目标 21 |
+| 语言 / 运行时 | Kotlin 2.4.x + JDK 27（Temurin；本机路径见 `.local/environment.md`） | 编译目标 25（Kotlin 2.4 上限），jlink / jpackage / 成品 `rt\` 全用 JDK 27 |
 | UI | Compose Multiplatform 1.12.x + Material 3 | 单窗口 + 托盘，不做自适应三栏 |
 | 网络 | Ktor client（CIO）+ `content-negotiation` + `kotlinx-serialization-json` | 只要 HTTP/JSON，**不需要 WebSocket / gRPC** |
 | 序列化 | kotlinx-serialization-json | DTO 手写（proto 生成 Kotlin 的成本不划算，见 §3.6） |
@@ -275,12 +275,29 @@ daemon 侧的上下文就被取消，状态里随后冒出 `wait for signal stre
 
 ## 5. 构建与运行
 
+### 运行时基线与内置字体（从 JBR 换到 Temurin 的补偿）
+
+基线是官方 **Temurin 27**，不再用 JBR。JBR 自带的 43 个字体与 Swing 文本抗锯齿默认值随之消失，
+UI 侧对应做了三件事：
+
+- `composeResources/font/` 内置 **Inter**（界面）与 **JetBrains Mono**（等宽），
+  `src/commonMain/.../theme/AppTypography.kt` 统一接管 `MaterialTheme` 排版。
+  中文不在这两族里，由 Skia 回退系统字体（Windows 上是微软雅黑）—— 刻意的，避免背 10 MB+ CJK 字体。
+- 许可文件在 `composeResources/files/LICENSE-*.txt`（SIL OFL 1.1，允许随应用分发）；
+  换字体时必须同时更新许可。
+- 启动器 cfg 与开发态 `jvmArgs` 都显式传 `-Dawt.useSystemAAFontSettings=on -Dswing.aatext=true`
+  （托盘菜单是 Swing/Java2D 画的），以及 `-Dstdout.encoding=UTF-8` 等编码参数。
+
+**不要**把文本改回 `FontFamily.Monospace` / `FontFamily.Default`：那会绕开内置字体，
+在没有 JBR 的机器上观感不一致；需要等宽就调 `appMonoFontFamily()`。
+
 ```bash
 cd desktop-ui
 
-# 本机 JDK 25：在 local.properties 里写绝对路径，文件不进 git（已忽略）
+# 本机 JDK 27：在 local.properties 里写绝对路径，文件不进 git（已忽略）
 #   netbird.jdk.dir=<jdk-home>                     # 本机取值见 .local/environment.md
-# 编译目标 21（jvmTarget），运行靠 JDK 25 即可。
+# 编译目标 25（jvmTarget，Kotlin 2.4 的上限）；jlink / jpackage / 成品 rt\ 都用这份 JDK。
+# 官方 Temurin 27 Windows 包**没有 jmods/**，jlink 走 JEP 493 直接从运行时镜像裁剪（不用额外装 JDK）。
 
 ./gradlew :composeApp:run            # 运行 UI
 ./gradlew :composeApp:compileKotlinDesktop  # 只编译（快速检查；compileKotlin 在 KMP 下是歧义任务）
@@ -375,7 +392,7 @@ rt\                             jlink 裁剪运行时
 
 | 任务 | 作用 |
 |---|---|
-| `linkRuntime` | 用 `netbird.jdk.dir` 的 `jmods/` 跑 jlink：`--strip-debug --no-header-files --no-man-pages --compress=zip-9` |
+| `linkRuntime` | 用 `netbird.jdk.dir` 的 `bin\jlink.exe` 裁剪：`--strip-debug --no-header-files --no-man-pages --compress=zip-9`。有 `jmods/` 就加 `--module-path`，没有就走 JEP 493（Temurin 27 属于这种） |
 | `jpackageLauncher` | jpackage 只生成启动器：`--runtime-image` 指向**空目录** |
 | `launcherBundle` | 拷贝 exe + **自己写** cfg（runtime 外挂 `rt\`、classpath 指向 `bin\`/`lib\*`） |
 | `syncReleaseTest` | `Sync` 到 `<repo>\release-test`，并 preserve `profiles/`、`ui/`、`Netbird/`、后端二进制 |
@@ -384,8 +401,8 @@ rt\                             jlink 裁剪运行时
 而且 runtime 与启动器绑死；空 runtime + 自写 cfg 让 `rt\` 可以单独替换（换 JDK 只换一个目录）。
 `createDistributable`（Compose 自带）只用于开发时快速看 app-image，**不参与 release**。
 
-**实测体积**（Temurin JBR SDK 25.0.4.1）：jpackage 默认 runtime **85.6 MB** → jlink 裁剪后
-**58.6 MB**（-31.5%，205 个文件）。
+**实测体积**（Temurin 27 + JEP 493）：jpackage 默认 runtime **85.6 MB** → jlink 裁剪后
+**48.4 MB / 155 个文件**（9 个模块）。换成 Temurin 后比 JBR SDK 25 的裁剪产物还小。
 
 模块清单与理由（少一个就是运行期 `NoClassDefFoundError`，而且往往只在打包态暴露）：
 
@@ -411,7 +428,7 @@ rt\                             jlink 裁剪运行时
 
 ```powershell
 # 1. 静态闭包（在 release-test\lib 上跑；注意 Windows 通配符）
-jdeps --print-module-deps --ignore-missing-deps --multi-release 21 lib\*.jar
+jdeps --print-module-deps --ignore-missing-deps --multi-release 25 lib\*.jar
 
 # 2. 差值补进 runtimeModules，然后重建成品
 ./gradlew :composeApp:syncReleaseTest
@@ -429,8 +446,8 @@ jdeps --print-module-deps --ignore-missing-deps --multi-release 21 lib\*.jar
 - jpackage 产出的 exe 带 **ReadOnly** 属性：覆盖前要 `setWritable(true)`，否则 `Sync` 报
   `Access denied`（`forceDeleteTree()` 与 `doFirst` 里都做了）。
 
-`jmods` 缺失时（用 `jbr-*` 纯运行时或普通 JRE 打包）`linkRuntime` 会跳过，`syncReleaseTest`
-直接失败并提示换 `jbrsdk-*` —— 不会产出没有 `rt\` 的坏包。
+`jmods/` 缺失不再让 `linkRuntime` 跳过（JDK 24+ 的 JEP 493 允许从运行时镜像裁剪）。
+只有拿 JRE（没有 `bin\jlink.exe`）时才会直接失败，`syncReleaseTest` 也不会产出没有 `rt\` 的坏包。
 
 ---
 
@@ -442,8 +459,15 @@ jdeps --print-module-deps --ignore-missing-deps --multi-release 21 lib\*.jar
 ./gradlew :composeApp:build                        # 1. 编译 + 测试
 ./gradlew :composeApp:verifyReleaseTest            # 2. 同步 + 校验（内部先 syncReleaseTest）
 pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1 -SkipBackend   # 3. 补后端与配置
-# 4. 冒烟：见技能 desktop-release-packaging §验证工作流
+pwsh -NoProfile -File desktop-ui\scripts\package-release.ps1 -Tag v0.1.2-0.82.0    # 4. 打发布 zip
+# 5. 冒烟：见技能 desktop-release-packaging §验证工作流
 ```
+
+**CI 走同一条链**：推 tag `v<本仓库版本>-<上游版本>`（或手动触发
+`.github/workflows/desktop-ui-release.yml`）→ 安装 Temurin 27 → 编译 `netbird-multi.exe`（含本 fork
+补丁）→ `verifyReleaseTest` → `package-release.ps1` → 创建/覆盖 GitHub Release 并上传 zip 与
+`SHA256SUMS.txt`。CI 没有 `local.properties`，靠 `JAVA_HOME`（JDK 27）回退，与本地是同一份 JDK、
+同一套任务；tag 里的版本必须等于 `appVersion`，否则 workflow 直接失败。
 
 **禁止**：
 
@@ -457,7 +481,7 @@ pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1 -SkipBackend 
 | 改动 | 后果 |
 |---|---|
 | 加/换依赖 | 先按技能里的 `jdeps` 流程复核 `runtimeModules`，再 `verifyReleaseTest` |
-| 换 JDK / 改 `netbird.jdk.dir` | `rt\` 由 jlink 产出，必须重跑；`jmods/` 缺失会直接失败 |
+| 换 JDK / 改 `netbird.jdk.dir` | `rt\` 由 jlink 产出，必须重跑；拿 JRE（无 `jlink.exe`）会直接失败，没有 `jmods/` 则走 JEP 493 |
 | 改图标 SVG | 先 `scripts/make-icons.ps1`，再 `verifyReleaseTest`（否则 exe 还是旧图标） |
 | 改主类 / 包名 / JVM 参数 | 都在 `build.gradle.kts` 的常量与 cfg 里；重跑，不要手改 cfg |
 
@@ -587,7 +611,8 @@ pwsh -NoProfile -File desktop-ui\scripts\assemble-release-test.ps1
 | 单实例唤醒 | 已有实例在托盘时再启动一次启动器：窗口出现在前台（`MainWindowHandle` 从 0 变成非 0），进程数不变、不弹第二个窗口 |
 | 托盘 | 关闭窗口后进程仍在、托盘可恢复；右键菜单**中文正常**且不被任务栏裁切；退出菜单项真的退出 |
 | 图标 | 窗口标题栏与托盘都显示蓝色 NetBird mark；`createDistributable` 产出的 exe 图标一致（`ExtractAssociatedIcon` 可读） |
-| 裁剪 runtime | `rt\release` 的 `MODULES` 等于 `runtimeModules`，体积 ≈ 58 MB；用 `rt\bin\java.exe -cp "bin\App.jar;lib\*"` 跑探测：GBK/Unsafe/AWT/xml/TLS 全部可用；应用窗口、托盘、主题切换正常 |
+| 裁剪 runtime | `rt\release` 的 `MODULES` 等于 `runtimeModules`，体积 ≈ 48 MB；用 `rt\bin\java.exe -cp "bin\App.jar;lib\*"` 跑探测：GBK/Unsafe/AWT/xml/TLS 全部可用；应用窗口、托盘、主题切换正常 |
+| 内置字体 | `App.jar` 里有 `composeResources/*/font/{Inter-*.otf,JetBrainsMono-*.ttf}`；成品窗口英文是 Inter、中文回退系统字体（微软雅黑）且无 tofu，日志页等宽是 JetBrains Mono |
 | release 结构 | `app\netbird-multi-ui.cfg` 的 `app.runtime` 指向 `$ROOTDIR\rt`；`lib\` 里有 `skiko-windows-x64.dll`、`.sha256`、`icudtl.dat`；双击 exe 能起（会弹一次 UAC） |
 
 GUI 级别的自动化（真实窗口驱动、截图断言）见技能 `dev-desktop-gui-e2e-testing`。

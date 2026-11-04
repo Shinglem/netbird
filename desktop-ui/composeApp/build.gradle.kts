@@ -24,7 +24,7 @@ plugins {
 }
 
 // JDK 来源：`-Pnetbird.jdk.dir=…` → `local.properties` 的 `netbird.jdk.dir`。
-// 不做 toolchain 自动探测（本机的 JBR 不会被 Gradle 识别）。没配就退回 Gradle 自己的 JDK。
+// 不做 toolchain 自动探测（本机的 JDK 不会被 Gradle 识别）。没配就退回 Gradle 自己的 JDK。
 val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.isFile) file.inputStream().use { load(it) }
@@ -35,7 +35,9 @@ val jdkHome: String? =
 
 kotlin {
     jvm("desktop") {
-        compilerOptions { jvmTarget.set(JvmTarget.JVM_21) }
+        // 目标字节码 25：Kotlin 2.4 的 JvmTarget 最高只到 25（没有 JVM_27）。工具链是 JDK 27，
+        // 它同时负责 Gradle、jlink、jpackage 与成品 rt\ —— 三者必须是同一份 JDK。
+        compilerOptions { jvmTarget.set(JvmTarget.JVM_25) }
     }
 
     sourceSets {
@@ -74,6 +76,13 @@ kotlin {
     }
 }
 
+// 内置字体与许可文件在 composeResources 下；资源访问器与 hermes-compose 用同一套命名，
+// 避免生成到 `netbird_ui.composeapp.generated.resources` 这种随模块名漂移的包。
+compose.resources {
+    publicResClass = false
+    packageOfResClass = "dev.shinglem.netbird.resources"
+}
+
 // 测试也会调 FFM（WindowsRunAs 用 `open` 走同一条 ShellExecuteExW 路径），
 // 显式声明原生访问，避免 JDK 24+ 的 restricted-method 警告。
 tasks.withType<Test>().configureEach {
@@ -104,39 +113,58 @@ val runtimeModules = listOf(
     "jdk.unsupported",   // sun.misc.Unsafe（skiko / 协程兜底）
 )
 
-/** jlink 的输入必须含 `jmods/`：`jbr-*` 是纯运行时、`jbrsdk-*` 才有。 */
-val jmodsHome: File? = (jdkHome?.let(::File) ?: File(System.getProperty("java.home")))
-    .let { File(it, "jmods") }
-    .takeIf { it.isDirectory }
+/**
+ * jlink 的输入：优先用 JDK 自带的 `jmods/`。
+ *
+ * 没有 `jmods/` 也不代表不能裁剪：JDK 24+ 的 JEP 493 让 jlink 直接从运行时镜像
+ * （`lib/modules`）出图，官方 Temurin 27 Windows 包就是这种（实测无 `jmods/`）。
+ * 代价是只能保留该运行时里已有的模块，本项目的模块集合全都在，所以够用。
+ */
+val jdkHomeDir: File = jdkHome?.let(::File) ?: File(System.getProperty("java.home"))
+val jmodsHome: File? = File(jdkHomeDir, "jmods").takeIf { it.isDirectory }
 
 val jlinkRuntimeDir = layout.buildDirectory.dir("jlink-runtime")
 
 val linkRuntime by tasks.registering(Exec::class) {
     group = "distribution"
-    description = "用 jmods jlink 出一份裁剪运行时（含 jdk.charsets / jdk.unsupported）"
+    description = "jlink 出一份裁剪运行时（有 jmods 用它，没有走 JEP 493）"
 
     val jmods = jmodsHome
-    val jlinkExe = jmods?.parentFile?.let { File(it, "bin/jlink.exe") }
-    onlyIf { jmods != null && jlinkExe != null && jlinkExe.isFile }
+    val jlinkExe = File(jdkHomeDir, "bin/jlink.exe")
 
     inputs.property("modules", runtimeModules)
+    inputs.property("jlink", jlinkExe.absolutePath)
     inputs.property("jmods", jmods?.absolutePath.orEmpty())
     outputs.dir(jlinkRuntimeDir)
     // jmods 的路径不变不代表内容不变（换 JDK 时路径可能相同），每次都重建，代价几秒。
     outputs.upToDateWhen { false }
 
     doFirst {
+        if (!jlinkExe.isFile) {
+            throw GradleException(
+                "找不到 jlink：${jlinkExe.absolutePath}\n" +
+                    "netbird.jdk.dir 要指向 JDK（不是 JRE）；没配就退回 Gradle 自己的 JDK。",
+            )
+        }
         val out = jlinkRuntimeDir.get().asFile
         out.deleteRecursively()
+        logger.lifecycle(
+            "[release] jlink 裁剪运行时：${runtimeModules.size} 个模块" +
+                if (jmods != null) "（jmods 模式）" else "（JEP 493，无 jmods）",
+        )
         commandLine(
-            listOf(
-                jlinkExe!!.absolutePath,
-                "--module-path", jmods!!.absolutePath,
-                "--add-modules", runtimeModules.joinToString(","),
-                "--output", out.absolutePath,
-                // 去掉 class 调试信息、C 头文件、man 页；zip-9 压 jimage。
-                "--strip-debug", "--no-header-files", "--no-man-pages", "--compress=zip-9",
-            ),
+            buildList {
+                add(jlinkExe.absolutePath)
+                jmods?.let { addAll(listOf("--module-path", it.absolutePath)) }
+                addAll(
+                    listOf(
+                        "--add-modules", runtimeModules.joinToString(","),
+                        "--output", out.absolutePath,
+                        // 去掉 class 调试信息、C 头文件、man 页；zip-9 压 jimage。
+                        "--strip-debug", "--no-header-files", "--no-man-pages", "--compress=zip-9",
+                    ),
+                )
+            },
         )
     }
 }
@@ -270,6 +298,13 @@ val launcherBundle by tasks.registering {
             appendLine("java-options=-Dcompose.application.resources.dir=\$ROOTDIR\\bin")
             // skiko 的 dll 与 sha256 从 jar 里解压到 lib\（见 syncReleaseTest）。
             appendLine("java-options=-Dskiko.library.path=\$ROOTDIR\\lib")
+            // 重定向/管道默认跟随系统代码页（简中 Windows 是 GBK）；显式统一成 UTF-8。
+            appendLine("java-options=-Dfile.encoding=UTF-8")
+            appendLine("java-options=-Dstdout.encoding=UTF-8")
+            appendLine("java-options=-Dstderr.encoding=UTF-8")
+            // 托盘菜单是 Swing/Java2D 画的：JBR 默认开文本抗锯齿，官方 JDK 要显式打开。
+            appendLine("java-options=-Dawt.useSystemAAFontSettings=on")
+            appendLine("java-options=-Dswing.aatext=true")
         }
         val appDir = File(out, "app").apply { mkdirs() }
         File(appDir, "$appImageName.cfg").writeText(cfg, Charsets.UTF_8)
@@ -333,8 +368,8 @@ val syncReleaseTest by tasks.registering(Sync::class) {
         if (!File(runtimeHome, "bin/server/jvm.dll").isFile) {
             throw GradleException(
                 "没有可用的裁剪运行时：${runtimeHome.absolutePath}\n" +
-                    "jlink 需要含 jmods 的 JDK（jbrsdk-*，不是 jbr-*）。在 desktop-ui/local.properties " +
-                    "里写 netbird.jdk.dir=<jbrsdk 目录> 后重跑。",
+                    "先跑 :composeApp:linkRuntime 看 jlink 的报错；netbird.jdk.dir 要指向 JDK" +
+                    "（含 jlink 与 jpackage 的完整发行版）。",
             )
         }
 
@@ -390,6 +425,8 @@ fun verifyReleaseLayout() {
         "app.classpath=\$ROOTDIR\\bin\\App.jar",
         "app.classpath=\$ROOTDIR\\lib\\*",
         "java-options=-Dskiko.library.path=\$ROOTDIR\\lib",
+        "java-options=-Dfile.encoding=UTF-8",
+        "java-options=-Dawt.useSystemAAFontSettings=on",
     ).forEach { expected ->
         if (!cfg.contains(expected)) {
             throw GradleException("cfg 缺少：$expected（不要手改 app\\*.cfg，重跑 syncReleaseTest）")
@@ -454,7 +491,15 @@ compose.desktop {
         jdkHome?.let { javaHome = it }
         // shell32 的 ShellExecuteExW 走 FFM（提权要 runas）。JDK 24+ 把未声明原生访问
         // 视为受限调用，不加这个参数每次启动都会打警告。
-        jvmArgs += "--enable-native-access=ALL-UNNAMED"
+        jvmArgs += listOf(
+            "--enable-native-access=ALL-UNNAMED",
+            // 与成品 cfg 同一组：开发态也要看到一致的编码与 Swing 字体渲染。
+            "-Dfile.encoding=UTF-8",
+            "-Dstdout.encoding=UTF-8",
+            "-Dstderr.encoding=UTF-8",
+            "-Dawt.useSystemAAFontSettings=on",
+            "-Dswing.aatext=true",
+        )
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi)

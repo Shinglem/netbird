@@ -21,12 +21,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.shinglem.netbird.ui.api.PeerState
 import dev.shinglem.netbird.ui.daemon.DaemonState
 import dev.shinglem.netbird.ui.daemon.ProfileSupervisor
 import dev.shinglem.netbird.ui.data.UiState
+import dev.shinglem.netbird.ui.theme.appMonoFontFamily
 
 @Composable
 fun PeersPage(supervisor: ProfileSupervisor) {
@@ -105,7 +105,7 @@ private fun PeerRow(peer: PeerState, expanded: Boolean, onToggle: () -> Unit) {
                     Text(
                         text = peer.ip + if (peer.ipv6.isNotBlank()) " · ${peer.ipv6}" else "",
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = appMonoFontFamily(),
                     )
                 }
                 StatusPill(

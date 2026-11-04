@@ -57,7 +57,11 @@ fun NetBirdTheme(
         ThemeMode.LIGHT -> false
         ThemeMode.DARK -> true
     }
-    MaterialTheme(colorScheme = style.colorScheme(dark), content = content)
+    MaterialTheme(
+        colorScheme = style.colorScheme(dark),
+        typography = appTypography(),
+        content = content,
+    )
 }
 
 fun ThemeStyle.colorScheme(dark: Boolean): ColorScheme = when (this) {

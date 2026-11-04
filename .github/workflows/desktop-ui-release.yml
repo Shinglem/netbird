@@ -153,8 +153,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = '${{ steps.ver.outputs.tag }}'
-          & .\desktop-ui\scripts\package-release.ps1 -Tag $tag -OutDir 'C:\out'
-          if ($LASTEXITCODE -ne 0) { throw "打发布包失败，exit=$LASTEXITCODE" }
+          # PowerShell 脚本不会设置 $LASTEXITCODE：失败时由脚本自己 throw。
+          try {
+            & .\desktop-ui\scripts\package-release.ps1 -Tag $tag -OutDir 'C:\out'
+          } catch {
+            throw "打发布包失败：$_"
+          }
           Get-ChildItem 'C:\out' | Format-Table Name, Length
 
       - name: 保留构建产物

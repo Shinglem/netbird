@@ -571,6 +571,12 @@ assert.Equal(t, expectedResult, result, "Result should match expected")
   `create tun device: ... cannot find the file specified`。
 - **删 wintun PnP 设备前先确认归属。** 这个设备类是与无关软件共享的（实测某台机器上列着
   Tailscale 的适配器），判归属看 `FriendlyName` 并在候选二进制里搜 GUID。
+- **`WgPort` 落在动态端口范围（49152–65535）里迟早被系统服务抢。** 被占时日志报
+  `listen udp6 :<port>: bind: Only one usage of each socket address`，状态永远停在
+  `Connecting`。占用者常常只持有 IPv6 通配地址（实测 `Internet Connection Sharing`），
+  所以 `Get-NetUDPEndpoint -LocalPort <port>` 看到 `LocalAddress=::` 就是这个情形。
+  部署上把 `WgPort` 设成 `0`（动态）或设到 49152 以下的固定值；探测逻辑的缺陷见
+  [`patchdoc/0003-wgport-probe-parity.md`](patchdoc/0003-wgport-probe-parity.md)。
 
 ## 提交与发布
 
@@ -954,6 +960,7 @@ git grep -nIE '[A-Za-z]:\\\\|/home/[a-z]|/Users/[A-Za-z]|/mnt/[a-z]|/s/[a-z]+/' 
 |---|---|
 | [`patchdoc/0001-profile-driven-instance-identity.md`](patchdoc/0001-profile-driven-instance-identity.md) | 三处代码改动的逐处说明与位置选择理由 |
 | [`patchdoc/0002-nrpt-prefix-timing.md`](patchdoc/0002-nrpt-prefix-timing.md) | 启动时序缺陷的完整机制与复现步骤 |
+| [`patchdoc/0003-wgport-probe-parity.md`](patchdoc/0003-wgport-probe-parity.md) | `WgPort` 探测与真实绑定不一致，端口被系统服务占住时引擎起不来 |
 | [`.ai/skill/netbird-multi-instance/`](.ai/skill/netbird-multi-instance/SKILL.md) | 部署与排障手法（含 `references/` 下的现场证据） |
 
 ### 与上游同步
@@ -964,10 +971,12 @@ git fetch upstream
 git rebase upstream/main
 ```
 
-改动集中在 4 个文件、约 140 行，冲突可能性低；若真冲突，会落在这两处：
+改动集中在几个小文件、约 200 行，冲突可能性低；若真冲突，会落在这几处：
 
 - `client/internal/profilemanager/config.go` —— `Config` 的字段区与 import 区
 - `client/internal/dns/host_windows.go` —— 前缀及其派生值由 `const` 改 `var` 的那段
+- `client/internal/connect.go` —— 上游可能改写 `freePort`；本 fork 的版本委托给
+  `probeUDPPort`，平台实现分别在 `connect_port_windows.go` / `connect_port_other.go`
 
 本 fork 不推送上游，rebase 只是为了跟上新版本。**本文件是上游 `AGENTS.md` 的中文改写版**，
 rebase 时这个文件必然冲突，解决方式是保留本文件（我们的版本），再从上游差异里挑出真正的规则变更

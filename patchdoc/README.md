@@ -18,6 +18,7 @@
 |---|---|
 | [`0001-profile-driven-instance-identity.md`](0001-profile-driven-instance-identity.md) | 三处代码改动：改了什么、改在哪、每处位置为何这样选 |
 | [`0002-nrpt-prefix-timing.md`](0002-nrpt-prefix-timing.md) | 启动时序缺陷的完整机制与复现步骤 |
+| [`0003-wgport-probe-parity.md`](0003-wgport-probe-parity.md) | `WgPort` 探测与真实绑定不一致导致引擎起不来 |
 | [`../AGENTS.md`](../AGENTS.md) | **规则在这里**：「本 fork 的改动」一节已把这套补丁的硬规则、部署形态、验收全部并入 |
 
 **分工：`AGENTS.md` 是规则，`patchdoc/` 是变更记录与证据。** 两边冲突时以 `AGENTS.md` 为准，

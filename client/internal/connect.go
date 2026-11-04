@@ -826,28 +826,16 @@ func statusRecorderToSignalConnStateNotifier(statusRecorder *peer.Status) signal
 
 // freePort attempts to determine if the provided port is available, if not it will ask the system for a free port.
 func freePort(initPort int) (int, error) {
-	addr := net.UDPAddr{Port: initPort}
-
-	conn, err := net.ListenUDP("udp", &addr)
-	if err == nil {
-		returnPort := conn.LocalAddr().(*net.UDPAddr).Port
-		closeConnWithLog(conn)
-		return returnPort, nil
+	if port, err := probeUDPPort(initPort); err == nil {
+		return port, nil
 	}
 
 	// if the port is already in use, ask the system for a free port
-	addr.Port = 0
-	conn, err = net.ListenUDP("udp", &addr)
+	port, err := probeUDPPort(0)
 	if err != nil {
-		return 0, fmt.Errorf("unable to get a free port: %v", err)
+		return 0, fmt.Errorf("unable to get a free port: %w", err)
 	}
-
-	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok {
-		return 0, errors.New("wrong address type when getting a free port")
-	}
-	closeConnWithLog(conn)
-	return udpAddr.Port, nil
+	return port, nil
 }
 
 func closeConnWithLog(conn *net.UDPConn) {
